@@ -1,4 +1,5 @@
 /docs/superpowers/
 /gluetun-portwatch
+/vpn.yml.*
 *.local
 .DS_Store

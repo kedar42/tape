@@ -33,6 +33,39 @@ func TestQbitGetListenPort(t *testing.T) {
 	}
 }
 
+func TestQbitGetPreferencesParsesSafetyFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("Method = %q, want %q", r.Method, http.MethodGet)
+		}
+		if r.URL.Path != "/api/v2/app/preferences" {
+			t.Fatalf("Path = %q, want %q", r.URL.Path, "/api/v2/app/preferences")
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"listen_port":43532,"current_network_interface":"tun0","random_port":false,"upnp":false}`))
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewQbitClient(server.URL, server.Client())
+	prefs, err := client.GetPreferences(context.Background())
+	if err != nil {
+		t.Fatalf("GetPreferences returned error: %v", err)
+	}
+	if prefs.ListenPort != 43532 {
+		t.Fatalf("ListenPort = %d, want %d", prefs.ListenPort, 43532)
+	}
+	if prefs.CurrentNetworkInterface != "tun0" {
+		t.Fatalf("CurrentNetworkInterface = %q, want tun0", prefs.CurrentNetworkInterface)
+	}
+	if prefs.RandomPort {
+		t.Fatal("RandomPort = true, want false")
+	}
+	if prefs.UPnP {
+		t.Fatal("UPnP = true, want false")
+	}
+}
+
 func TestQbitGetListenPortRejectsMissingPort(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{}`))

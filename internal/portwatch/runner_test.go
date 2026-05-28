@@ -49,11 +49,13 @@ func (f *fakeGluetun) SetVPNStatus(_ context.Context, status string) error {
 
 type fakeQbit struct {
 	listenPort int
+	prefs      QbitPreferences
 	getErr     error
 	setErr     error
 	getCalls   int
 	setCalls   []int
 	ifaces     []string
+	onSet      func()
 }
 
 func (f *fakeQbit) GetListenPort(context.Context) (int, error) {
@@ -64,13 +66,38 @@ func (f *fakeQbit) GetListenPort(context.Context) (int, error) {
 	return f.listenPort, nil
 }
 
+func (f *fakeQbit) GetPreferences(context.Context) (QbitPreferences, error) {
+	f.getCalls++
+	if f.getErr != nil {
+		return QbitPreferences{}, f.getErr
+	}
+	if f.prefs.ListenPort != 0 || f.prefs.CurrentNetworkInterface != "" || f.prefs.RandomPort || f.prefs.UPnP {
+		return f.prefs, nil
+	}
+	return QbitPreferences{
+		ListenPort:              f.listenPort,
+		CurrentNetworkInterface: "tun0",
+		RandomPort:              false,
+		UPnP:                    false,
+	}, nil
+}
+
 func (f *fakeQbit) SetListenPort(_ context.Context, port int, iface string) error {
 	f.setCalls = append(f.setCalls, port)
 	f.ifaces = append(f.ifaces, iface)
+	if f.onSet != nil {
+		f.onSet()
+	}
 	if f.setErr != nil {
 		return f.setErr
 	}
 	f.listenPort = port
+	f.prefs = QbitPreferences{
+		ListenPort:              port,
+		CurrentNetworkInterface: iface,
+		RandomPort:              false,
+		UPnP:                    false,
+	}
 	return nil
 }
 
@@ -136,6 +163,73 @@ func TestRunnerDifferentGluetunPortWritesQbitAndUpdatesCache(t *testing.T) {
 	}
 }
 
+func TestRunnerSyncsWhenPortMatchesButQbitInterfaceUnsafe(t *testing.T) {
+	gluetun := &fakeGluetun{ports: []int{22222}}
+	qbit := &fakeQbit{prefs: QbitPreferences{
+		ListenPort:              22222,
+		CurrentNetworkInterface: "eth0",
+		RandomPort:              false,
+		UPnP:                    false,
+	}}
+	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce returned error: %v", err)
+	}
+	if len(qbit.setCalls) != 1 || qbit.setCalls[0] != 22222 || qbit.ifaces[0] != "tun0" {
+		t.Fatalf("set calls = %v ifaces=%v, want 22222 on tun0", qbit.setCalls, qbit.ifaces)
+	}
+}
+
+func TestRunnerSyncsWhenPortMatchesButRandomPortOrUPnPEnabled(t *testing.T) {
+	tests := []struct {
+		name       string
+		randomPort bool
+		upnp       bool
+	}{
+		{name: "random_port", randomPort: true},
+		{name: "upnp", upnp: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gluetun := &fakeGluetun{ports: []int{22222}}
+			qbit := &fakeQbit{prefs: QbitPreferences{
+				ListenPort:              22222,
+				CurrentNetworkInterface: "tun0",
+				RandomPort:              tt.randomPort,
+				UPnP:                    tt.upnp,
+			}}
+			runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+
+			if err := runner.RunOnce(context.Background()); err != nil {
+				t.Fatalf("RunOnce returned error: %v", err)
+			}
+			if len(qbit.setCalls) != 1 || qbit.setCalls[0] != 22222 || qbit.ifaces[0] != "tun0" {
+				t.Fatalf("set calls = %v ifaces=%v, want 22222 on tun0", qbit.setCalls, qbit.ifaces)
+			}
+		})
+	}
+}
+
+func TestRunnerSafeMatchingPrefsNoopDoesNotWrite(t *testing.T) {
+	gluetun := &fakeGluetun{ports: []int{22222}}
+	qbit := &fakeQbit{prefs: QbitPreferences{
+		ListenPort:              22222,
+		CurrentNetworkInterface: "tun0",
+		RandomPort:              false,
+		UPnP:                    false,
+	}}
+	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce returned error: %v", err)
+	}
+	if len(qbit.setCalls) != 0 {
+		t.Fatalf("set calls = %v, want none", qbit.setCalls)
+	}
+}
+
 func TestRunnerSuccessfulSyncLogReportsUpdatedCache(t *testing.T) {
 	var logs bytes.Buffer
 	gluetun := &fakeGluetun{ports: []int{22222}}
@@ -164,16 +258,16 @@ func TestRunnerSuccessfulSyncLogReportsUpdatedCache(t *testing.T) {
 	}
 }
 
-func TestRunnerFailedQbitWriteDoesNotUpdateCache(t *testing.T) {
+func TestRunnerFailedQbitWriteDoesNotReturnErrorAndInvalidatesCache(t *testing.T) {
 	gluetun := &fakeGluetun{ports: []int{22222}}
 	qbit := &fakeQbit{listenPort: 11111, setErr: errors.New("set failed")}
 	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}, "test"))
 
-	if err := runner.RunOnce(context.Background()); err == nil {
-		t.Fatal("RunOnce returned nil error, want qbit write error")
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce returned error: %v", err)
 	}
-	if runner.state.CachedQbitPort != 11111 || !runner.state.CacheValid {
-		t.Fatalf("cache = %+v, want original valid 11111", runner.state)
+	if runner.state.CacheValid || runner.state.CachedQbitPort != 11111 {
+		t.Fatalf("cache = %+v, want invalid cache retaining last known 11111", runner.state)
 	}
 }
 
@@ -182,8 +276,8 @@ func TestRunnerQbitWriteFailureForcesNextCycleRevalidation(t *testing.T) {
 	qbit := &fakeQbit{listenPort: 11111, setErr: errors.New("set failed")}
 	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}, "test"))
 
-	if err := runner.RunOnce(context.Background()); err == nil {
-		t.Fatal("first RunOnce returned nil error, want qbit write error")
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first RunOnce returned error: %v", err)
 	}
 	qbit.setErr = nil
 	qbit.listenPort = 22222
@@ -203,8 +297,8 @@ func TestRunnerUnknownCacheFailedQbitReadAndWriteLeavesCacheInvalid(t *testing.T
 	qbit := &fakeQbit{getErr: errors.New("get failed"), setErr: errors.New("set failed")}
 	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}, "test"))
 
-	if err := runner.RunOnce(context.Background()); err == nil {
-		t.Fatal("RunOnce returned nil error, want qbit write error")
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce returned error: %v", err)
 	}
 	if runner.state.CacheValid || runner.state.CachedQbitPort != 0 {
 		t.Fatalf("cache = %+v, want invalid empty cache", runner.state)
@@ -214,6 +308,30 @@ func TestRunnerUnknownCacheFailedQbitReadAndWriteLeavesCacheInvalid(t *testing.T
 	}
 	if len(qbit.setCalls) != 1 || qbit.setCalls[0] != 22222 {
 		t.Fatalf("set calls = %v, want one attempted sync to 22222", qbit.setCalls)
+	}
+}
+
+func TestRunnerLoopContinuesAfterQbitWriteFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	gluetun := &fakeGluetun{ports: []int{22222, 22222}}
+	qbit := &fakeQbit{listenPort: 11111, setErr: errors.New("set failed")}
+	qbit.onSet = func() {
+		if len(qbit.setCalls) == 2 {
+			cancel()
+		}
+	}
+	cfg := testRunnerConfig()
+	cfg.Once = false
+	cfg.Interval = time.Nanosecond
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+
+	if err := runner.Run(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run returned %v, want context canceled after continuing", err)
+	}
+	if len(qbit.setCalls) != 2 {
+		t.Fatalf("set calls = %v, want retry on next cycle", qbit.setCalls)
 	}
 }
 

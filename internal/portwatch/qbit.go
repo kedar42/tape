@@ -27,20 +27,36 @@ func NewQbitClient(baseURL string, httpClient *http.Client) *QbitClient {
 }
 
 func (c *QbitClient) GetListenPort(ctx context.Context) (int, error) {
-	var response struct {
-		ListenPort *int `json:"listen_port"`
-	}
-	if err := c.do(ctx, http.MethodGet, "/api/v2/app/preferences", nil, "", &response); err != nil {
+	prefs, err := c.GetPreferences(ctx)
+	if err != nil {
 		return 0, err
 	}
+	return prefs.ListenPort, nil
+}
+
+func (c *QbitClient) GetPreferences(ctx context.Context) (QbitPreferences, error) {
+	var response struct {
+		ListenPort              *int   `json:"listen_port"`
+		CurrentNetworkInterface string `json:"current_network_interface"`
+		RandomPort              bool   `json:"random_port"`
+		UPnP                    bool   `json:"upnp"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/v2/app/preferences", nil, "", &response); err != nil {
+		return QbitPreferences{}, err
+	}
 	if response.ListenPort == nil {
-		return 0, fmt.Errorf("qBittorrent API %s %s missing listen_port", http.MethodGet, "/api/v2/app/preferences")
+		return QbitPreferences{}, fmt.Errorf("qBittorrent API %s %s missing listen_port", http.MethodGet, "/api/v2/app/preferences")
 	}
 	if !ValidPort(*response.ListenPort) {
-		return 0, fmt.Errorf("qBittorrent API %s %s invalid listen_port %d", http.MethodGet, "/api/v2/app/preferences", *response.ListenPort)
+		return QbitPreferences{}, fmt.Errorf("qBittorrent API %s %s invalid listen_port %d", http.MethodGet, "/api/v2/app/preferences", *response.ListenPort)
 	}
 
-	return *response.ListenPort, nil
+	return QbitPreferences{
+		ListenPort:              *response.ListenPort,
+		CurrentNetworkInterface: response.CurrentNetworkInterface,
+		RandomPort:              response.RandomPort,
+		UPnP:                    response.UPnP,
+	}, nil
 }
 
 func (c *QbitClient) SetListenPort(ctx context.Context, port int, iface string) error {

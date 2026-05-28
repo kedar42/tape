@@ -32,6 +32,13 @@ type PortStatus struct {
 	Reason string
 }
 
+type QbitPreferences struct {
+	ListenPort              int
+	CurrentNetworkInterface string
+	RandomPort              bool
+	UPnP                    bool
+}
+
 type GluetunAPI interface {
 	GetForwardedPort(context.Context) (int, error)
 	SetVPNStatus(context.Context, string) error
@@ -44,4 +51,8 @@ type GluetunPortStatusAPI interface {
 type QbitAPI interface {
 	GetListenPort(context.Context) (int, error)
 	SetListenPort(context.Context, int, string) error
+}
+
+type QbitPreferencesAPI interface {
+	GetPreferences(context.Context) (QbitPreferences, error)
 }

@@ -128,15 +128,15 @@ func (r *Runner) initQbitCache(ctx context.Context, now time.Time) {
 	}
 	r.initialized = true
 
-	port, err := r.qbit.GetListenPort(ctx)
+	port, safe, err := r.readQbitCache(ctx)
 	if err != nil {
 		r.log.Log("init_qbit_cache", map[string]any{"error": err})
 		return
 	}
 	r.state.CachedQbitPort = port
-	r.state.CacheValid = true
+	r.state.CacheValid = safe
 	r.lastQbitRead = now
-	r.log.Log("init_qbit_cache", map[string]any{"qbit_port": port})
+	r.log.Log("init_qbit_cache", map[string]any{"qbit_port": port, "cache_valid": r.state.CacheValid})
 }
 
 func (r *Runner) refreshQbitIfNeeded(ctx context.Context, now time.Time) {
@@ -144,16 +144,36 @@ func (r *Runner) refreshQbitIfNeeded(ctx context.Context, now time.Time) {
 		return
 	}
 
-	port, err := r.qbit.GetListenPort(ctx)
+	port, safe, err := r.readQbitCache(ctx)
 	if err != nil {
 		r.log.Log("audit_qbit", map[string]any{"error": err, "cache_valid": r.state.CacheValid})
 		return
 	}
 	r.state.CachedQbitPort = port
-	r.state.CacheValid = true
+	r.state.CacheValid = safe
 	r.lastQbitRead = now
 	r.revalidateQbit = false
-	r.log.Log("audit_qbit", map[string]any{"qbit_port": port})
+	r.log.Log("audit_qbit", map[string]any{"qbit_port": port, "cache_valid": r.state.CacheValid})
+}
+
+func (r *Runner) readQbitCache(ctx context.Context) (int, bool, error) {
+	if qbit, ok := r.qbit.(QbitPreferencesAPI); ok {
+		prefs, err := qbit.GetPreferences(ctx)
+		if err != nil {
+			return 0, false, err
+		}
+		return prefs.ListenPort, qbitPreferencesSafe(prefs, r.cfg.QbitInterface), nil
+	}
+
+	port, err := r.qbit.GetListenPort(ctx)
+	if err != nil {
+		return 0, false, err
+	}
+	return port, ValidPort(port), nil
+}
+
+func qbitPreferencesSafe(prefs QbitPreferences, iface string) bool {
+	return ValidPort(prefs.ListenPort) && prefs.CurrentNetworkInterface == iface && !prefs.RandomPort && !prefs.UPnP
 }
 
 func (r *Runner) syncQbit(ctx context.Context, gluetunPort int) error {
@@ -167,10 +187,14 @@ func (r *Runner) syncQbit(ctx context.Context, gluetunPort int) error {
 	err := r.qbit.SetListenPort(ctx, gluetunPort, r.cfg.QbitInterface)
 	r.state.ApplySyncResult(gluetunPort, err)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		r.state.CacheValid = false
 		r.revalidateQbit = true
 		fields["error"] = err
 		r.log.Log(string(ActionSyncQbit), fields)
-		return err
+		return nil
 	}
 	r.state.MissingPortFailures = 0
 	fields["qbit_port"] = r.state.CachedQbitPort
