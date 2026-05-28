@@ -4,6 +4,10 @@
 
 The app is the sole qBittorrent sync owner. Gluetun still owns the VPN tunnel, firewall, and forwarded-port acquisition; this app only observes Gluetun's control API, updates qBittorrent when needed, and asks Gluetun to reacquire a port after repeated missing-port reads.
 
+## Development Transparency
+
+This project was developed with heavy AI assistance and human review, testing, and deployment verification.
+
 ## Safety Model
 
 This sidecar assumes:
@@ -68,6 +72,10 @@ ghcr.io/kedar42/tape
 
 on pushes to `main` and `v*` tags after tests pass. Pull requests run tests but do not push images.
 
+## Releases
+
+Releases are tagged manually with annotated semver tags, for example `v0.1.0`. Pushing a `v*` tag runs the container workflow and publishes matching GHCR image tags.
+
 ## Compose Example
 
 This example runs the sidecar on a Docker network that can reach both Gluetun and qBittorrent, mounts Gluetun's auth TOML read-only, and does not mount the Docker socket.
@@ -93,3 +101,7 @@ networks:
 ```
 
 Make sure qBittorrent is still routed through Gluetun's network namespace and not through this sidecar. This app needs HTTP reachability to Gluetun and qBittorrent only; it does not need the Docker socket.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
