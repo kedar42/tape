@@ -6,7 +6,6 @@ import (
 )
 
 type Config struct {
-	Name              string
 	GluetunURL        string
 	QbitURL           string
 	APIKeyFile        string

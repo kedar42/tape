@@ -19,7 +19,6 @@ func LoadConfig(args []string) (Config, error) {
 	var cfg Config
 	var err error
 
-	cfg.Name = os.Getenv("PORTWATCH_NAME")
 	cfg.GluetunURL = os.Getenv("GLUETUN_URL")
 	cfg.QbitURL = os.Getenv("QBIT_URL")
 	cfg.APIKeyFile = os.Getenv("GLUETUN_API_KEY_FILE")
@@ -43,7 +42,6 @@ func LoadConfig(args []string) (Config, error) {
 
 	fs := flag.NewFlagSet("gluetun-portwatch", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.StringVar(&cfg.Name, "name", cfg.Name, "watcher name")
 	fs.StringVar(&cfg.GluetunURL, "gluetun-url", cfg.GluetunURL, "Gluetun control server URL")
 	fs.StringVar(&cfg.QbitURL, "qbit-url", cfg.QbitURL, "qBittorrent web UI URL")
 	fs.StringVar(&cfg.APIKeyFile, "gluetun-api-key-file", cfg.APIKeyFile, "Gluetun API key file")
@@ -116,9 +114,6 @@ func envInt(name string, fallback int) (int, error) {
 }
 
 func validateConfig(cfg Config) error {
-	if cfg.Name == "" {
-		return errors.New("name is required")
-	}
 	if cfg.GluetunURL == "" {
 		return errors.New("gluetun URL is required")
 	}

@@ -9,16 +9,15 @@ import (
 )
 
 type Logger struct {
-	mu   sync.Mutex
-	out  io.Writer
-	name string
+	mu  sync.Mutex
+	out io.Writer
 }
 
-func NewLogger(out io.Writer, name string) *Logger {
+func NewLogger(out io.Writer) *Logger {
 	if out == nil {
 		out = io.Discard
 	}
-	return &Logger{out: out, name: name}
+	return &Logger{out: out}
 }
 
 func (l *Logger) Log(action string, fields map[string]any) {
@@ -26,10 +25,10 @@ func (l *Logger) Log(action string, fields map[string]any) {
 		return
 	}
 
-	parts := []string{"name=" + logValue(l.name), "action=" + logValue(action)}
+	parts := []string{"action=" + logValue(action)}
 	keys := make([]string, 0, len(fields))
 	for key := range fields {
-		if key == "name" || key == "action" {
+		if key == "action" {
 			continue
 		}
 		keys = append(keys, key)

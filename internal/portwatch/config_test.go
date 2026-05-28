@@ -8,7 +8,6 @@ import (
 )
 
 func TestLoadConfigDefaultsAndEnv(t *testing.T) {
-	t.Setenv("PORTWATCH_NAME", "private")
 	t.Setenv("GLUETUN_URL", "http://gluetun-private:8000")
 	t.Setenv("QBIT_URL", "http://gluetun-private:8080")
 	t.Setenv("GLUETUN_API_KEY_FILE", "/tmp/key")
@@ -18,9 +17,6 @@ func TestLoadConfigDefaultsAndEnv(t *testing.T) {
 		t.Fatalf("LoadConfig returned error: %v", err)
 	}
 
-	if cfg.Name != "private" {
-		t.Fatalf("Name = %q, want %q", cfg.Name, "private")
-	}
 	if cfg.GluetunURL != "http://gluetun-private:8000" {
 		t.Fatalf("GluetunURL = %q", cfg.GluetunURL)
 	}
@@ -51,13 +47,11 @@ func TestLoadConfigDefaultsAndEnv(t *testing.T) {
 }
 
 func TestLoadConfigFlagsOverrideEnv(t *testing.T) {
-	t.Setenv("PORTWATCH_NAME", "private")
 	t.Setenv("GLUETUN_URL", "http://gluetun-private:8000")
 	t.Setenv("QBIT_URL", "http://gluetun-private:8080")
 	t.Setenv("GLUETUN_API_KEY_FILE", "/tmp/key")
 
 	cfg, err := LoadConfig([]string{
-		"--name", "flag-name",
 		"--gluetun-url", "http://flag-gluetun:8000",
 		"--qbit-url", "http://flag-qbit:8080",
 		"--gluetun-api-key-file", "/tmp/flag-key",
@@ -74,9 +68,6 @@ func TestLoadConfigFlagsOverrideEnv(t *testing.T) {
 		t.Fatalf("LoadConfig returned error: %v", err)
 	}
 
-	if cfg.Name != "flag-name" {
-		t.Fatalf("Name = %q", cfg.Name)
-	}
 	if cfg.GluetunURL != "http://flag-gluetun:8000" {
 		t.Fatalf("GluetunURL = %q", cfg.GluetunURL)
 	}

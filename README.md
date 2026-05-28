@@ -22,7 +22,6 @@ Every setting can be provided by environment variable or flag. Flags override en
 
 | Environment variable | Flag | Default | Description |
 | --- | --- | --- | --- |
-| `PORTWATCH_NAME` | `--name` | none | Required watcher name used in logs. |
 | `GLUETUN_URL` | `--gluetun-url` | none | Required Gluetun control server URL. |
 | `QBIT_URL` | `--qbit-url` | none | Required qBittorrent Web UI URL. |
 | `GLUETUN_API_KEY_FILE` | `--gluetun-api-key-file` | none | Required file containing the Gluetun control API key or Gluetun auth TOML with `apikey = "..."`. |
@@ -82,15 +81,9 @@ services:
     networks:
       - app_net
     environment:
-      PORTWATCH_NAME: default
       GLUETUN_URL: http://gluetun:8000
       QBIT_URL: http://gluetun:8080
       GLUETUN_API_KEY_FILE: /run/secrets/gluetun-auth.toml
-      PORTWATCH_INTERVAL: 1m
-      PORTWATCH_FAILURES: "5"
-      PORTWATCH_COOLDOWN: 3m
-      PORTWATCH_QBIT_AUDIT_INTERVAL: 30m
-      QBIT_INTERFACE: tun0
     volumes:
       - ./config/gluetun/auth.toml:/run/secrets/gluetun-auth.toml:ro
 

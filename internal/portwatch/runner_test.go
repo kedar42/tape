@@ -103,7 +103,6 @@ func (f *fakeQbit) SetListenPort(_ context.Context, port int, iface string) erro
 
 func testRunnerConfig() Config {
 	return Config{
-		Name:              "test",
 		Interval:          time.Hour,
 		Failures:          2,
 		Cooldown:          time.Minute,
@@ -116,7 +115,7 @@ func testRunnerConfig() Config {
 func TestRunnerStartupReadsQbitOnceIntoCache(t *testing.T) {
 	gluetun := &fakeGluetun{ports: []int{12345}}
 	qbit := &fakeQbit{listenPort: 12345}
-	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}))
 
 	if err := runner.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce returned error: %v", err)
@@ -132,7 +131,7 @@ func TestRunnerStartupReadsQbitOnceIntoCache(t *testing.T) {
 func TestRunnerMatchingCycleDoesNotReadQbitAgain(t *testing.T) {
 	gluetun := &fakeGluetun{ports: []int{12345, 12345}}
 	qbit := &fakeQbit{listenPort: 12345}
-	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}))
 
 	if err := runner.RunOnce(context.Background()); err != nil {
 		t.Fatalf("first RunOnce returned error: %v", err)
@@ -150,7 +149,7 @@ func TestRunnerDifferentGluetunPortWritesQbitAndUpdatesCache(t *testing.T) {
 	qbit := &fakeQbit{listenPort: 11111}
 	cfg := testRunnerConfig()
 	cfg.QbitInterface = "wg0"
-	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
 
 	if err := runner.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce returned error: %v", err)
@@ -171,7 +170,7 @@ func TestRunnerSyncsWhenPortMatchesButQbitInterfaceUnsafe(t *testing.T) {
 		RandomPort:              false,
 		UPnP:                    false,
 	}}
-	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}))
 
 	if err := runner.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce returned error: %v", err)
@@ -200,7 +199,7 @@ func TestRunnerSyncsWhenPortMatchesButRandomPortOrUPnPEnabled(t *testing.T) {
 				RandomPort:              tt.randomPort,
 				UPnP:                    tt.upnp,
 			}}
-			runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+			runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}))
 
 			if err := runner.RunOnce(context.Background()); err != nil {
 				t.Fatalf("RunOnce returned error: %v", err)
@@ -220,7 +219,7 @@ func TestRunnerSafeMatchingPrefsNoopDoesNotWrite(t *testing.T) {
 		RandomPort:              false,
 		UPnP:                    false,
 	}}
-	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}))
 
 	if err := runner.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce returned error: %v", err)
@@ -234,7 +233,7 @@ func TestRunnerSuccessfulSyncLogReportsUpdatedCache(t *testing.T) {
 	var logs bytes.Buffer
 	gluetun := &fakeGluetun{ports: []int{22222}}
 	qbit := &fakeQbit{listenPort: 11111}
-	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(&logs, "test"))
+	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(&logs))
 
 	if err := runner.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce returned error: %v", err)
@@ -261,7 +260,7 @@ func TestRunnerSuccessfulSyncLogReportsUpdatedCache(t *testing.T) {
 func TestRunnerFailedQbitWriteDoesNotReturnErrorAndInvalidatesCache(t *testing.T) {
 	gluetun := &fakeGluetun{ports: []int{22222}}
 	qbit := &fakeQbit{listenPort: 11111, setErr: errors.New("set failed")}
-	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}))
 
 	if err := runner.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce returned error: %v", err)
@@ -274,7 +273,7 @@ func TestRunnerFailedQbitWriteDoesNotReturnErrorAndInvalidatesCache(t *testing.T
 func TestRunnerQbitWriteFailureForcesNextCycleRevalidation(t *testing.T) {
 	gluetun := &fakeGluetun{ports: []int{22222, 22222}}
 	qbit := &fakeQbit{listenPort: 11111, setErr: errors.New("set failed")}
-	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}))
 
 	if err := runner.RunOnce(context.Background()); err != nil {
 		t.Fatalf("first RunOnce returned error: %v", err)
@@ -295,7 +294,7 @@ func TestRunnerQbitWriteFailureForcesNextCycleRevalidation(t *testing.T) {
 func TestRunnerUnknownCacheFailedQbitReadAndWriteLeavesCacheInvalid(t *testing.T) {
 	gluetun := &fakeGluetun{ports: []int{22222}}
 	qbit := &fakeQbit{getErr: errors.New("get failed"), setErr: errors.New("set failed")}
-	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}))
 
 	if err := runner.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce returned error: %v", err)
@@ -325,7 +324,7 @@ func TestRunnerLoopContinuesAfterQbitWriteFailure(t *testing.T) {
 	cfg := testRunnerConfig()
 	cfg.Once = false
 	cfg.Interval = time.Nanosecond
-	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
 
 	if err := runner.Run(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run returned %v, want context canceled after continuing", err)
@@ -338,7 +337,7 @@ func TestRunnerLoopContinuesAfterQbitWriteFailure(t *testing.T) {
 func TestRunnerMissingPortBelowThresholdDoesNotReacquire(t *testing.T) {
 	gluetun := &fakeGluetun{ports: []int{0}}
 	qbit := &fakeQbit{listenPort: 11111}
-	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}))
 
 	if err := runner.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce returned error: %v", err)
@@ -354,7 +353,7 @@ func TestRunnerMissingPortBelowThresholdDoesNotReacquire(t *testing.T) {
 func TestRunnerLogsDistinctReasonsForMissingAndZeroPort(t *testing.T) {
 	var missingLogs bytes.Buffer
 	missingGluetun := &fakeGluetun{portStatuses: []PortStatus{{Port: 0, Reason: "missing_port"}}}
-	missingRunner := NewRunner(testRunnerConfig(), missingGluetun, &fakeQbit{listenPort: 11111}, NewLogger(&missingLogs, "test"))
+	missingRunner := NewRunner(testRunnerConfig(), missingGluetun, &fakeQbit{listenPort: 11111}, NewLogger(&missingLogs))
 	if err := missingRunner.RunOnce(context.Background()); err != nil {
 		t.Fatalf("missing RunOnce returned error: %v", err)
 	}
@@ -365,7 +364,7 @@ func TestRunnerLogsDistinctReasonsForMissingAndZeroPort(t *testing.T) {
 
 	var zeroLogs bytes.Buffer
 	zeroGluetun := &fakeGluetun{portStatuses: []PortStatus{{Port: 0, Reason: "zero_port"}}}
-	zeroRunner := NewRunner(testRunnerConfig(), zeroGluetun, &fakeQbit{listenPort: 11111}, NewLogger(&zeroLogs, "test"))
+	zeroRunner := NewRunner(testRunnerConfig(), zeroGluetun, &fakeQbit{listenPort: 11111}, NewLogger(&zeroLogs))
 	if err := zeroRunner.RunOnce(context.Background()); err != nil {
 		t.Fatalf("zero RunOnce returned error: %v", err)
 	}
@@ -387,7 +386,7 @@ func actionLine(logs, action string) string {
 func TestRunnerMissingPortAtThresholdStopsThenRunsVPN(t *testing.T) {
 	gluetun := &fakeGluetun{ports: []int{0, 0}}
 	qbit := &fakeQbit{listenPort: 11111}
-	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}))
 	runner.reacquireDelay = 0
 
 	if err := runner.RunOnce(context.Background()); err != nil {
@@ -413,7 +412,7 @@ func TestRunnerReacquireStartsVPNWhenStopReturnsError(t *testing.T) {
 	qbit := &fakeQbit{listenPort: 11111}
 	cfg := testRunnerConfig()
 	cfg.Failures = 1
-	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
 	runner.reacquireDelay = 0
 
 	err := runner.RunOnce(context.Background())
@@ -431,7 +430,7 @@ func TestRunnerReacquireForcesNextCycleQbitRevalidation(t *testing.T) {
 	cfg := testRunnerConfig()
 	cfg.Failures = 1
 	cfg.QbitAuditInterval = time.Hour
-	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
 	runner.reacquireDelay = 0
 
 	if err := runner.RunOnce(context.Background()); err != nil {
@@ -451,7 +450,7 @@ func TestRunnerReacquireUpdatesCooldownState(t *testing.T) {
 	cfg := testRunnerConfig()
 	cfg.Failures = 1
 	cfg.Cooldown = time.Hour
-	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
 	runner.reacquireDelay = 0
 
 	if err := runner.RunOnce(context.Background()); err != nil {
@@ -474,7 +473,7 @@ func TestRunnerDryRunDoesNotWriteQbitOrReacquire(t *testing.T) {
 	cfg.DryRun = true
 	gluetun := &fakeGluetun{ports: []int{22222, 0, 0}}
 	qbit := &fakeQbit{listenPort: 11111}
-	runner := NewRunner(cfg, gluetun, qbit, NewLogger(&logs, "test"))
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(&logs))
 	runner.reacquireDelay = 0
 
 	for i := 0; i < 3; i++ {
@@ -498,7 +497,7 @@ func TestRunnerOnceExitsAfterOneCycle(t *testing.T) {
 	qbit := &fakeQbit{listenPort: 12345}
 	cfg := testRunnerConfig()
 	cfg.Once = true
-	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
 
 	if err := runner.Run(context.Background()); err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -513,7 +512,7 @@ func TestRunnerAuditRefreshesQbitCache(t *testing.T) {
 	qbit := &fakeQbit{listenPort: 12345}
 	cfg := testRunnerConfig()
 	cfg.QbitAuditInterval = time.Nanosecond
-	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
 
 	if err := runner.RunOnce(context.Background()); err != nil {
 		t.Fatalf("first RunOnce returned error: %v", err)
@@ -536,7 +535,7 @@ func TestRunnerAuditsAfterCacheCreatedByWriteWithoutRead(t *testing.T) {
 	qbit := &fakeQbit{listenPort: 11111, getErr: errors.New("read failed")}
 	cfg := testRunnerConfig()
 	cfg.QbitAuditInterval = time.Nanosecond
-	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}, "test"))
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
 
 	if err := runner.RunOnce(context.Background()); err != nil {
 		t.Fatalf("first RunOnce returned error: %v", err)
@@ -556,12 +555,15 @@ func TestRunnerAuditsAfterCacheCreatedByWriteWithoutRead(t *testing.T) {
 
 func TestLoggerWritesKeyValueLines(t *testing.T) {
 	var out bytes.Buffer
-	logger := NewLogger(&out, "test-name")
+	logger := NewLogger(&out)
 
 	logger.Log("sync_qbit", map[string]any{"port": 12345, "dry_run": true})
 
 	line := out.String()
-	for _, want := range []string{"name=test-name", "action=sync_qbit", "port=12345", "dry_run=true", "\n"} {
+	if strings.Contains(line, "name=") {
+		t.Fatalf("log line %q includes removed name prefix", line)
+	}
+	for _, want := range []string{"action=sync_qbit", "port=12345", "dry_run=true", "\n"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("log line %q missing %q", line, want)
 		}

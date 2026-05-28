@@ -27,7 +27,7 @@ func main() {
 	httpClient := &http.Client{Timeout: cfg.HTTPTimeout}
 	gluetun := portwatch.NewGluetunClient(cfg.GluetunURL, apiKey, httpClient)
 	qbit := portwatch.NewQbitClient(cfg.QbitURL, httpClient)
-	logger := portwatch.NewLogger(os.Stdout, cfg.Name)
+	logger := portwatch.NewLogger(os.Stdout)
 	runner := portwatch.NewRunner(cfg, gluetun, qbit, logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

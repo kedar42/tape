@@ -48,7 +48,6 @@ func TestMainReadAPIKeyErrorExits2(t *testing.T) {
 	cmd := exec.Command(os.Args[0], "-test.run=TestMainReadAPIKeyErrorExits2")
 	cmd.Env = append(os.Environ(),
 		"PORTWATCH_TEST_MAIN=1",
-		"PORTWATCH_NAME=test",
 		"GLUETUN_URL=http://gluetun:8000",
 		"QBIT_URL=http://gluetun:8080",
 		"GLUETUN_API_KEY_FILE=/path/that/does/not/exist",
