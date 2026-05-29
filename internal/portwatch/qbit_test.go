@@ -99,6 +99,33 @@ func TestQbitCookieAuthLogsInAndReusesCookie(t *testing.T) {
 	}
 }
 
+func TestQbitCookieAuthSendsOriginForCSRFProtection(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Origin"); got != server.URL {
+			t.Fatalf("%s Origin = %q, want %q", r.URL.Path, got, server.URL)
+		}
+
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			http.SetCookie(w, &http.Cookie{Name: "SID", Value: "cookie-session", Path: "/"})
+			_, _ = w.Write([]byte("Ok."))
+		case "/api/v2/app/setPreferences":
+			if _, err := r.Cookie("SID"); err != nil {
+				t.Fatalf("missing SID cookie: %v", err)
+			}
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewQbitClient(server.URL, server.Client(), QbitAuth{Username: "admin", Password: "secret"})
+	if err := client.SetListenPort(context.Background(), 43532, "tun0"); err != nil {
+		t.Fatalf("SetListenPort returned error: %v", err)
+	}
+}
+
 func TestQbitCookieAuthReloginsOnceAfterForbidden(t *testing.T) {
 	loginCount := 0
 	protectedCount := 0

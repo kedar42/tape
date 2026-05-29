@@ -175,6 +175,9 @@ func (c *QbitClient) doOnce(ctx context.Context, method, path string, body []byt
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
+	if c.usesCookieAuth() {
+		req.Header.Set("Origin", req.URL.Scheme+"://"+req.URL.Host)
+	}
 	if c.auth.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.auth.APIKey)
 	}
@@ -194,6 +197,7 @@ func (c *QbitClient) loginLocked(ctx context.Context) error {
 		return fmt.Errorf("qBittorrent API %s %s create request: %w", http.MethodPost, "/api/v2/auth/login", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", req.URL.Scheme+"://"+req.URL.Host)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("qBittorrent API %s %s request failed: %w", http.MethodPost, "/api/v2/auth/login", err)
