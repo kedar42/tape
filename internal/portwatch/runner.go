@@ -7,15 +7,16 @@ import (
 )
 
 type Runner struct {
-	cfg            Config
-	gluetun        GluetunAPI
-	qbit           QbitAPI
-	log            *Logger
-	state          WatchState
-	initialized    bool
-	lastQbitRead   time.Time
-	revalidateQbit bool
-	reacquireDelay time.Duration
+	cfg               Config
+	gluetun           GluetunAPI
+	qbit              QbitAPI
+	log               *Logger
+	state             WatchState
+	initialized       bool
+	lastQbitRead      time.Time
+	revalidateQbit    bool
+	reacquireDelay    time.Duration
+	recoveryStartedAt time.Time
 }
 
 func NewRunner(cfg Config, gluetun GluetunAPI, qbit QbitAPI, log *Logger) *Runner {
@@ -37,7 +38,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			return nil
 		}
 
-		timer := time.NewTimer(r.cfg.Interval)
+		timer := time.NewTimer(r.nextInterval(time.Now()))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -65,6 +66,7 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 	}
 
 	if ValidPort(gluetunPort) {
+		r.exitRecovery()
 		r.refreshQbitIfNeeded(ctx, now)
 	}
 
@@ -85,6 +87,7 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 	case ActionSyncQbit:
 		return r.syncQbit(ctx, gluetunPort)
 	case ActionRecordMissingPort:
+		r.enterRecovery(now)
 		r.state.MissingPortFailures = decision.NextMissingPortFailures
 		fields := map[string]any{"gluetun_port": gluetunPort, "failures": r.state.MissingPortFailures, "threshold": r.cfg.Failures}
 		if missingPortReason != "" {
@@ -93,8 +96,10 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		r.log.Log(string(ActionRecordMissingPort), fields)
 		return nil
 	case ActionReacquirePort:
+		r.enterRecovery(now)
 		return r.reacquire(ctx, now)
 	case ActionCooldown:
+		r.enterRecovery(now)
 		r.state.MissingPortFailures = decision.NextMissingPortFailures
 		fields := map[string]any{"gluetun_port": gluetunPort, "failures": r.state.MissingPortFailures, "threshold": r.cfg.Failures}
 		if missingPortReason != "" {
@@ -105,6 +110,23 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 	default:
 		return nil
 	}
+}
+
+func (r *Runner) enterRecovery(now time.Time) {
+	if r.recoveryStartedAt.IsZero() {
+		r.recoveryStartedAt = now
+	}
+}
+
+func (r *Runner) exitRecovery() {
+	r.recoveryStartedAt = time.Time{}
+}
+
+func (r *Runner) nextInterval(now time.Time) time.Duration {
+	if r.recoveryStartedAt.IsZero() || now.Sub(r.recoveryStartedAt) >= r.cfg.RecoveryDuration {
+		return r.cfg.Interval
+	}
+	return r.cfg.RecoveryInterval
 }
 
 func (r *Runner) getGluetunPort(ctx context.Context) (int, string, error) {

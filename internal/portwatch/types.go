@@ -17,6 +17,8 @@ type Config struct {
 	Cooldown          time.Duration
 	HTTPTimeout       time.Duration
 	QbitAuditInterval time.Duration
+	RecoveryInterval  time.Duration
+	RecoveryDuration  time.Duration
 	QbitInterface     string
 	Once              bool
 	DryRun            bool
