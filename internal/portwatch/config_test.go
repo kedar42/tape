@@ -42,6 +42,12 @@ func TestLoadConfigDefaultsAndEnv(t *testing.T) {
 	if cfg.QbitAuditInterval != 30*time.Minute {
 		t.Fatalf("QbitAuditInterval = %s, want %s", cfg.QbitAuditInterval, 30*time.Minute)
 	}
+	if cfg.RecoveryInterval != 10*time.Second {
+		t.Fatalf("RecoveryInterval = %s, want %s", cfg.RecoveryInterval, 10*time.Second)
+	}
+	if cfg.RecoveryDuration != 3*time.Minute {
+		t.Fatalf("RecoveryDuration = %s, want %s", cfg.RecoveryDuration, 3*time.Minute)
+	}
 	if cfg.QbitInterface != "tun0" {
 		t.Fatalf("QbitInterface = %q, want %q", cfg.QbitInterface, "tun0")
 	}
@@ -66,6 +72,8 @@ func TestLoadConfigFlagsOverrideEnv(t *testing.T) {
 		"--failures", "7",
 		"--cooldown", "5m",
 		"--qbit-audit-interval", "15m",
+		"--recovery-interval", "5s",
+		"--recovery-duration", "2m",
 		"--http-timeout", "4s",
 		"--qbit-interface", "wg0",
 		"--once",
@@ -104,6 +112,12 @@ func TestLoadConfigFlagsOverrideEnv(t *testing.T) {
 	}
 	if cfg.QbitAuditInterval != 15*time.Minute {
 		t.Fatalf("QbitAuditInterval = %s", cfg.QbitAuditInterval)
+	}
+	if cfg.RecoveryInterval != 5*time.Second {
+		t.Fatalf("RecoveryInterval = %s", cfg.RecoveryInterval)
+	}
+	if cfg.RecoveryDuration != 2*time.Minute {
+		t.Fatalf("RecoveryDuration = %s", cfg.RecoveryDuration)
 	}
 	if cfg.HTTPTimeout != 4*time.Second {
 		t.Fatalf("HTTPTimeout = %s", cfg.HTTPTimeout)
@@ -187,6 +201,8 @@ func TestLoadConfigRejectsNonPositiveValues(t *testing.T) {
 		{name: "cooldown", args: []string{"--cooldown", "0s"}},
 		{name: "http timeout", args: []string{"--http-timeout", "0s"}},
 		{name: "qbit audit interval", args: []string{"--qbit-audit-interval", "0s"}},
+		{name: "recovery interval", args: []string{"--recovery-interval", "0s"}},
+		{name: "recovery duration", args: []string{"--recovery-duration", "0s"}},
 	}
 
 	for _, tt := range tests {
@@ -195,6 +211,25 @@ func TestLoadConfigRejectsNonPositiveValues(t *testing.T) {
 				t.Fatal("LoadConfig returned nil error, want error")
 			}
 		})
+	}
+}
+
+func TestLoadConfigReadsRecoveryDurationsFromEnv(t *testing.T) {
+	t.Setenv("GLUETUN_URL", "http://gluetun:8000")
+	t.Setenv("QBIT_URL", "http://gluetun:8080")
+	t.Setenv("GLUETUN_API_KEY_FILE", "/tmp/key")
+	t.Setenv("PORTWATCH_RECOVERY_INTERVAL", "7s")
+	t.Setenv("PORTWATCH_RECOVERY_DURATION", "4m")
+
+	cfg, err := LoadConfig([]string{})
+	if err != nil {
+		t.Fatalf("LoadConfig returned error: %v", err)
+	}
+	if cfg.RecoveryInterval != 7*time.Second {
+		t.Fatalf("RecoveryInterval = %s, want %s", cfg.RecoveryInterval, 7*time.Second)
+	}
+	if cfg.RecoveryDuration != 4*time.Minute {
+		t.Fatalf("RecoveryDuration = %s, want %s", cfg.RecoveryDuration, 4*time.Minute)
 	}
 }
 

@@ -117,6 +117,8 @@ func testRunnerConfig() Config {
 		Failures:          2,
 		Cooldown:          time.Minute,
 		QbitAuditInterval: time.Hour,
+		RecoveryInterval:  10 * time.Second,
+		RecoveryDuration:  3 * time.Minute,
 		QbitInterface:     "tun0",
 		Once:              true,
 	}
@@ -390,6 +392,113 @@ func TestRunnerGluetunReadErrorDoesNotCountAsMissingPort(t *testing.T) {
 	}
 	if len(gluetun.statuses) != 0 {
 		t.Fatalf("statuses = %v, want no reacquire on read error", gluetun.statuses)
+	}
+}
+
+func TestRunnerUsesRecoveryIntervalAfterMissingPort(t *testing.T) {
+	now := time.Now()
+	cfg := testRunnerConfig()
+	cfg.Interval = time.Minute
+	cfg.RecoveryInterval = 10 * time.Second
+	cfg.RecoveryDuration = 3 * time.Minute
+	gluetun := &fakeGluetun{ports: []int{0}}
+	qbit := &fakeQbit{listenPort: 11111}
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
+
+	if got := runner.nextInterval(now); got != time.Minute {
+		t.Fatalf("initial next interval = %s, want %s", got, time.Minute)
+	}
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce returned error: %v", err)
+	}
+	if got := runner.nextInterval(now); got != 10*time.Second {
+		t.Fatalf("recovery next interval = %s, want %s", got, 10*time.Second)
+	}
+}
+
+func TestRunnerUsesRecoveryIntervalAfterReacquire(t *testing.T) {
+	now := time.Now()
+	cfg := testRunnerConfig()
+	cfg.Interval = time.Minute
+	cfg.Failures = 1
+	cfg.RecoveryInterval = 10 * time.Second
+	cfg.RecoveryDuration = 3 * time.Minute
+	gluetun := &fakeGluetun{ports: []int{0}}
+	qbit := &fakeQbit{listenPort: 11111}
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
+	runner.reacquireDelay = 0
+
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce returned error: %v", err)
+	}
+	if got := runner.nextInterval(now); got != 10*time.Second {
+		t.Fatalf("post-reacquire next interval = %s, want %s", got, 10*time.Second)
+	}
+}
+
+func TestRunnerReturnsToNormalIntervalAfterRecoveryDuration(t *testing.T) {
+	now := time.Now()
+	cfg := testRunnerConfig()
+	cfg.Interval = time.Minute
+	cfg.RecoveryInterval = 10 * time.Second
+	cfg.RecoveryDuration = 3 * time.Minute
+	gluetun := &fakeGluetun{ports: []int{0}}
+	qbit := &fakeQbit{listenPort: 11111}
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
+
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce returned error: %v", err)
+	}
+	runner.recoveryStartedAt = now.Add(-4 * time.Minute)
+	if got := runner.nextInterval(now); got != time.Minute {
+		t.Fatalf("expired recovery next interval = %s, want %s", got, time.Minute)
+	}
+}
+
+func TestRunnerDoesNotRestartRecoveryAfterDurationWhilePortStillMissing(t *testing.T) {
+	now := time.Now()
+	cfg := testRunnerConfig()
+	cfg.Interval = time.Minute
+	cfg.Failures = 10
+	cfg.RecoveryInterval = 10 * time.Second
+	cfg.RecoveryDuration = 3 * time.Minute
+	gluetun := &fakeGluetun{ports: []int{0, 0}}
+	qbit := &fakeQbit{listenPort: 11111}
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
+
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first RunOnce returned error: %v", err)
+	}
+	runner.recoveryStartedAt = now.Add(-4 * time.Minute)
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce returned error: %v", err)
+	}
+	if got := runner.nextInterval(now); got != time.Minute {
+		t.Fatalf("continued missing next interval = %s, want %s", got, time.Minute)
+	}
+}
+
+func TestRunnerExitsRecoveryAfterValidPort(t *testing.T) {
+	now := time.Now()
+	cfg := testRunnerConfig()
+	cfg.Interval = time.Minute
+	cfg.RecoveryInterval = 10 * time.Second
+	cfg.RecoveryDuration = 3 * time.Minute
+	gluetun := &fakeGluetun{ports: []int{0, 12345}}
+	qbit := &fakeQbit{listenPort: 11111}
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
+
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first RunOnce returned error: %v", err)
+	}
+	if got := runner.nextInterval(now); got != 10*time.Second {
+		t.Fatalf("recovery next interval = %s, want %s", got, 10*time.Second)
+	}
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce returned error: %v", err)
+	}
+	if got := runner.nextInterval(now); got != time.Minute {
+		t.Fatalf("post-recovery next interval = %s, want %s", got, time.Minute)
 	}
 }
 

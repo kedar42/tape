@@ -24,6 +24,8 @@ type configCLI struct {
 	Cooldown          time.Duration `name:"cooldown" env:"PORTWATCH_COOLDOWN" default:"3m" help:"failure cooldown"`
 	HTTPTimeout       time.Duration `name:"http-timeout" env:"PORTWATCH_HTTP_TIMEOUT" default:"10s" help:"HTTP timeout"`
 	QbitAuditInterval time.Duration `name:"qbit-audit-interval" env:"PORTWATCH_QBIT_AUDIT_INTERVAL" default:"30m" help:"qBittorrent audit interval"`
+	RecoveryInterval  time.Duration `name:"recovery-interval" env:"PORTWATCH_RECOVERY_INTERVAL" default:"10s" help:"recovery poll interval after a missing port"`
+	RecoveryDuration  time.Duration `name:"recovery-duration" env:"PORTWATCH_RECOVERY_DURATION" default:"3m" help:"recovery poll duration after a missing port"`
 	QbitInterface     string        `name:"qbit-interface" env:"QBIT_INTERFACE" default:"tun0" help:"qBittorrent network interface"`
 	Once              bool          `name:"once" help:"run once and exit"`
 	DryRun            bool          `name:"dry-run" help:"log actions without changing state"`
@@ -54,6 +56,8 @@ func LoadConfig(args []string) (Config, error) {
 		Cooldown:          cli.Cooldown,
 		HTTPTimeout:       cli.HTTPTimeout,
 		QbitAuditInterval: cli.QbitAuditInterval,
+		RecoveryInterval:  cli.RecoveryInterval,
+		RecoveryDuration:  cli.RecoveryDuration,
 		QbitInterface:     cli.QbitInterface,
 		Once:              cli.Once,
 		DryRun:            cli.DryRun,
@@ -170,6 +174,12 @@ func validateConfig(cfg Config) error {
 	}
 	if cfg.QbitAuditInterval <= 0 {
 		return errors.New("qbit audit interval must be greater than zero")
+	}
+	if cfg.RecoveryInterval <= 0 {
+		return errors.New("recovery interval must be greater than zero")
+	}
+	if cfg.RecoveryDuration <= 0 {
+		return errors.New("recovery duration must be greater than zero")
 	}
 	return nil
 }

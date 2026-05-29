@@ -37,6 +37,8 @@ Every setting can be provided by environment variable or flag. Flags override en
 | `PORTWATCH_COOLDOWN` | `--cooldown` | `3m` | Cooldown after a reacquisition attempt before another attempt is allowed. |
 | `PORTWATCH_HTTP_TIMEOUT` | `--http-timeout` | `10s` | Timeout for Gluetun and qBittorrent HTTP calls. |
 | `PORTWATCH_QBIT_AUDIT_INTERVAL` | `--qbit-audit-interval` | `30m` | Periodic qBittorrent listen-port audit interval. |
+| `PORTWATCH_RECOVERY_INTERVAL` | `--recovery-interval` | `10s` | Temporary poll interval after Gluetun reports a missing forwarded port. |
+| `PORTWATCH_RECOVERY_DURATION` | `--recovery-duration` | `3m` | Maximum time to use the recovery poll interval after a missing forwarded port. |
 | `QBIT_INTERFACE` | `--qbit-interface` | `tun0` | qBittorrent network interface value to set with the listen port. |
 | none | `--once` | `false` | Run one poll/sync cycle and exit. |
 | none | `--dry-run` | `false` | Log intended actions without changing qBittorrent or Gluetun state. |
@@ -67,7 +69,7 @@ When `QBIT_API_KEY_FILE` is set, username/password settings are ignored.
 
 On startup, the app reads qBittorrent's current listen port once and caches it. During normal operation it polls only Gluetun, which keeps the steady-state loop small and avoids repeatedly reading qBittorrent when Gluetun's forwarded port is unchanged.
 
-The app periodically audits qBittorrent according to `PORTWATCH_QBIT_AUDIT_INTERVAL` / `--qbit-audit-interval`. It also revalidates qBittorrent after uncertainty, such as a failed qBittorrent update or a Gluetun VPN reacquisition. If Gluetun reports no valid forwarded port, the app records that state and does not write `0` to qBittorrent.
+The app periodically audits qBittorrent according to `PORTWATCH_QBIT_AUDIT_INTERVAL` / `--qbit-audit-interval`. It also revalidates qBittorrent after uncertainty, such as a failed qBittorrent update or a Gluetun VPN reacquisition. If Gluetun reports no valid forwarded port, the app records that state, temporarily polls faster according to `PORTWATCH_RECOVERY_INTERVAL` / `--recovery-interval`, and does not write `0` to qBittorrent.
 
 ## Local Commands
 
