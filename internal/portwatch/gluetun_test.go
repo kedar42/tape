@@ -265,7 +265,7 @@ func TestGluetunSetVPNStatusRejectsInvalidStatus(t *testing.T) {
 	}
 }
 
-func TestNewGluetunClientTrimsBaseURLSlash(t *testing.T) {
+func TestNewGluetunClientUsesBaseURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/portforward" {
 			t.Fatalf("Path = %q, want %q", r.URL.Path, "/v1/portforward")
@@ -274,7 +274,7 @@ func TestNewGluetunClientTrimsBaseURLSlash(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	client := NewGluetunClient(server.URL+"/", "test-key", server.Client())
+	client := NewGluetunClient(server.URL, "test-key", server.Client())
 	_, err := client.GetForwardedPort(context.Background())
 	if err != nil {
 		t.Fatalf("GetForwardedPort returned error: %v", err)

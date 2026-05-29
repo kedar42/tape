@@ -9,6 +9,9 @@ type Config struct {
 	GluetunURL        string
 	QbitURL           string
 	APIKeyFile        string
+	QbitAPIKeyFile    string
+	QbitUsername      string
+	QbitPasswordFile  string
 	Interval          time.Duration
 	Failures          int
 	Cooldown          time.Duration
@@ -22,6 +25,7 @@ type Config struct {
 type WatchState struct {
 	CachedQbitPort      int
 	CacheValid          bool
+	ForceQbitSync       bool
 	MissingPortFailures int
 	LastReacquireAt     time.Time
 }
@@ -36,6 +40,12 @@ type QbitPreferences struct {
 	CurrentNetworkInterface string
 	RandomPort              bool
 	UPnP                    bool
+}
+
+type QbitAuth struct {
+	APIKey   string
+	Username string
+	Password string
 }
 
 type GluetunAPI interface {

@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"gluetun-portwatch/internal/portwatch"
@@ -23,10 +25,15 @@ func main() {
 		fmt.Fprintf(os.Stderr, "api key error: %v\n", err)
 		os.Exit(2)
 	}
+	qbitAuth, err := qbitAuthFromConfig(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "qbit auth error: %v\n", err)
+		os.Exit(2)
+	}
 
 	httpClient := &http.Client{Timeout: cfg.HTTPTimeout}
 	gluetun := portwatch.NewGluetunClient(cfg.GluetunURL, apiKey, httpClient)
-	qbit := portwatch.NewQbitClient(cfg.QbitURL, httpClient)
+	qbit := portwatch.NewQbitClient(cfg.QbitURL, httpClient, qbitAuth)
 	logger := portwatch.NewLogger(os.Stdout)
 	runner := portwatch.NewRunner(cfg, gluetun, qbit, logger)
 
@@ -40,6 +47,42 @@ func main() {
 		fmt.Fprintf(os.Stderr, "watcher error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func qbitAuthFromConfig(cfg portwatch.Config) (portwatch.QbitAuth, error) {
+	if strings.TrimSpace(cfg.QbitAPIKeyFile) != "" {
+		apiKey, err := readTrimmedSecretFile(cfg.QbitAPIKeyFile)
+		if err != nil {
+			return portwatch.QbitAuth{}, fmt.Errorf("read qbit api key file: %w", err)
+		}
+		return portwatch.QbitAuth{APIKey: apiKey}, nil
+	}
+
+	username := strings.TrimSpace(cfg.QbitUsername)
+	passwordFile := strings.TrimSpace(cfg.QbitPasswordFile)
+	if username == "" && passwordFile == "" {
+		return portwatch.QbitAuth{}, nil
+	}
+	if username == "" || passwordFile == "" {
+		return portwatch.QbitAuth{}, errors.New("qbit username and password file must both be set or both be empty")
+	}
+	password, err := readTrimmedSecretFile(passwordFile)
+	if err != nil {
+		return portwatch.QbitAuth{}, fmt.Errorf("read qbit password file: %w", err)
+	}
+	return portwatch.QbitAuth{Username: username, Password: password}, nil
+}
+
+func readTrimmedSecretFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	secret := strings.TrimSpace(string(data))
+	if secret == "" {
+		return "", errors.New("secret file is empty")
+	}
+	return secret, nil
 }
 
 func exitCodeForRunError(err error) int {

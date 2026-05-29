@@ -24,7 +24,7 @@ func NewGluetunClient(baseURL, apiKey string, httpClient *http.Client) *GluetunC
 	}
 
 	return &GluetunClient{
-		baseURL:    strings.TrimRight(baseURL, "/"),
+		baseURL:    baseURL,
 		apiKey:     apiKey,
 		httpClient: httpClient,
 	}

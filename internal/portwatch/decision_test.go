@@ -10,7 +10,7 @@ func TestDecideMatchingValidPortsNoops(t *testing.T) {
 	now := time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)
 
 	decision := Decide(DecisionInput{
-		Now: now,
+		Now:         now,
 		GluetunPort: 51820,
 		State: WatchState{
 			CachedQbitPort:      51820,
@@ -23,6 +23,27 @@ func TestDecideMatchingValidPortsNoops(t *testing.T) {
 
 	if decision.Action != ActionNoop {
 		t.Fatalf("Action = %v, want %v", decision.Action, ActionNoop)
+	}
+	if decision.NextMissingPortFailures != 0 {
+		t.Fatalf("NextMissingPortFailures = %d, want 0", decision.NextMissingPortFailures)
+	}
+}
+
+func TestDecideMatchingPortSyncsWhenForceQbitSync(t *testing.T) {
+	decision := Decide(DecisionInput{
+		Now:         time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC),
+		GluetunPort: 51820,
+		State: WatchState{
+			CachedQbitPort: 51820,
+			CacheValid:     true,
+			ForceQbitSync:  true,
+		},
+		FailuresThreshold: 3,
+		Cooldown:          5 * time.Minute,
+	})
+
+	if decision.Action != ActionSyncQbit {
+		t.Fatalf("Action = %v, want %v", decision.Action, ActionSyncQbit)
 	}
 	if decision.NextMissingPortFailures != 0 {
 		t.Fatalf("NextMissingPortFailures = %d, want 0", decision.NextMissingPortFailures)
@@ -74,7 +95,7 @@ func TestDecideValidGluetunPortSyncsQbit(t *testing.T) {
 
 func TestMissingPortBelowThresholdRecordsFailure(t *testing.T) {
 	decision := Decide(DecisionInput{
-		Now: time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC),
+		Now:         time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC),
 		GluetunPort: 0,
 		State: WatchState{
 			MissingPortFailures: 1,

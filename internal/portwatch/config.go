@@ -2,64 +2,68 @@ package portwatch
 
 import (
 	"errors"
-	"flag"
 	"fmt"
-	"io"
+	"net/url"
 	"os"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/BurntSushi/toml"
+	"github.com/alecthomas/kong"
 )
 
-var apiKeyPattern = regexp.MustCompile(`(?m)^\s*apikey\s*=\s*"([^"]+)"`)
-var apiKeyAssignmentPattern = regexp.MustCompile(`(?m)^\s*apikey\s*=`)
+type configCLI struct {
+	GluetunURL        string        `name:"gluetun-url" env:"GLUETUN_URL" help:"Gluetun control server URL"`
+	QbitURL           string        `name:"qbit-url" env:"QBIT_URL" help:"qBittorrent web UI URL"`
+	APIKeyFile        string        `name:"gluetun-api-key-file" env:"GLUETUN_API_KEY_FILE" help:"Gluetun API key file"`
+	QbitAPIKeyFile    string        `name:"qbit-api-key-file" env:"QBIT_API_KEY_FILE" help:"qBittorrent API key file"`
+	QbitUsername      string        `name:"qbit-username" env:"QBIT_USERNAME" help:"qBittorrent username"`
+	QbitPasswordFile  string        `name:"qbit-password-file" env:"QBIT_PASSWORD_FILE" help:"qBittorrent password file"`
+	Interval          time.Duration `name:"interval" env:"PORTWATCH_INTERVAL" default:"1m" help:"poll interval"`
+	Failures          int           `name:"failures" env:"PORTWATCH_FAILURES" default:"5" help:"failure threshold"`
+	Cooldown          time.Duration `name:"cooldown" env:"PORTWATCH_COOLDOWN" default:"3m" help:"failure cooldown"`
+	HTTPTimeout       time.Duration `name:"http-timeout" env:"PORTWATCH_HTTP_TIMEOUT" default:"10s" help:"HTTP timeout"`
+	QbitAuditInterval time.Duration `name:"qbit-audit-interval" env:"PORTWATCH_QBIT_AUDIT_INTERVAL" default:"30m" help:"qBittorrent audit interval"`
+	QbitInterface     string        `name:"qbit-interface" env:"QBIT_INTERFACE" default:"tun0" help:"qBittorrent network interface"`
+	Once              bool          `name:"once" help:"run once and exit"`
+	DryRun            bool          `name:"dry-run" help:"log actions without changing state"`
+}
 
 func LoadConfig(args []string) (Config, error) {
-	var cfg Config
-	var err error
-
-	cfg.GluetunURL = os.Getenv("GLUETUN_URL")
-	cfg.QbitURL = os.Getenv("QBIT_URL")
-	cfg.APIKeyFile = os.Getenv("GLUETUN_API_KEY_FILE")
-	cfg.QbitInterface = envString("QBIT_INTERFACE", "tun0")
-
-	if cfg.Interval, err = envDuration("PORTWATCH_INTERVAL", time.Minute); err != nil {
+	var cli configCLI
+	parser, err := kong.New(&cli,
+		kong.Name("gluetun-portwatch"),
+		kong.Exit(func(int) {}),
+	)
+	if err != nil {
 		return Config{}, err
 	}
-	if cfg.Cooldown, err = envDuration("PORTWATCH_COOLDOWN", 3*time.Minute); err != nil {
-		return Config{}, err
-	}
-	if cfg.HTTPTimeout, err = envDuration("PORTWATCH_HTTP_TIMEOUT", 10*time.Second); err != nil {
-		return Config{}, err
-	}
-	if cfg.QbitAuditInterval, err = envDuration("PORTWATCH_QBIT_AUDIT_INTERVAL", 30*time.Minute); err != nil {
-		return Config{}, err
-	}
-	if cfg.Failures, err = envInt("PORTWATCH_FAILURES", 5); err != nil {
+	if _, err := parser.Parse(args); err != nil {
 		return Config{}, err
 	}
 
-	fs := flag.NewFlagSet("gluetun-portwatch", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.StringVar(&cfg.GluetunURL, "gluetun-url", cfg.GluetunURL, "Gluetun control server URL")
-	fs.StringVar(&cfg.QbitURL, "qbit-url", cfg.QbitURL, "qBittorrent web UI URL")
-	fs.StringVar(&cfg.APIKeyFile, "gluetun-api-key-file", cfg.APIKeyFile, "Gluetun API key file")
-	fs.DurationVar(&cfg.Interval, "interval", cfg.Interval, "poll interval")
-	fs.IntVar(&cfg.Failures, "failures", cfg.Failures, "failure threshold")
-	fs.DurationVar(&cfg.Cooldown, "cooldown", cfg.Cooldown, "failure cooldown")
-	fs.DurationVar(&cfg.HTTPTimeout, "http-timeout", cfg.HTTPTimeout, "HTTP timeout")
-	fs.DurationVar(&cfg.QbitAuditInterval, "qbit-audit-interval", cfg.QbitAuditInterval, "qBittorrent audit interval")
-	fs.StringVar(&cfg.QbitInterface, "qbit-interface", cfg.QbitInterface, "qBittorrent network interface")
-	fs.BoolVar(&cfg.Once, "once", cfg.Once, "run once and exit")
-	fs.BoolVar(&cfg.DryRun, "dry-run", cfg.DryRun, "log actions without changing state")
-
-	if err := fs.Parse(args); err != nil {
-		return Config{}, err
+	cfg := Config{
+		GluetunURL:        cli.GluetunURL,
+		QbitURL:           cli.QbitURL,
+		APIKeyFile:        cli.APIKeyFile,
+		QbitAPIKeyFile:    cli.QbitAPIKeyFile,
+		QbitUsername:      cli.QbitUsername,
+		QbitPasswordFile:  cli.QbitPasswordFile,
+		Interval:          cli.Interval,
+		Failures:          cli.Failures,
+		Cooldown:          cli.Cooldown,
+		HTTPTimeout:       cli.HTTPTimeout,
+		QbitAuditInterval: cli.QbitAuditInterval,
+		QbitInterface:     cli.QbitInterface,
+		Once:              cli.Once,
+		DryRun:            cli.DryRun,
 	}
 	if err := validateConfig(cfg); err != nil {
 		return Config{}, err
 	}
+	cfg.GluetunURL = normalizeURL(cfg.GluetunURL)
+	cfg.QbitURL = normalizeURL(cfg.QbitURL)
+	cfg.QbitInterface = strings.TrimSpace(cfg.QbitInterface)
 
 	return cfg, nil
 }
@@ -73,55 +77,84 @@ func ReadAPIKey(path string) (string, error) {
 	if content == "" {
 		return "", errors.New("api key file is empty")
 	}
-	if match := apiKeyPattern.FindStringSubmatch(content); len(match) == 2 {
-		return match[1], nil
+	if !looksLikeAPIKeyTOML(content) {
+		return content, nil
 	}
-	if apiKeyAssignmentPattern.MatchString(content) {
-		return "", errors.New("api key not found")
+
+	var decoded map[string]any
+	if _, err := toml.Decode(content, &decoded); err != nil {
+		return "", errors.New("api key file is not valid TOML")
 	}
-	return content, nil
+	keys := collectAPIKeys(decoded)
+	if len(keys) != 1 {
+		return "", fmt.Errorf("api key file must contain exactly one apikey, found %d", len(keys))
+	}
+	key := strings.TrimSpace(keys[0])
+	if key == "" {
+		return "", errors.New("api key file contains an empty apikey")
+	}
+	return key, nil
 }
 
-func envString(name, fallback string) string {
-	if value := os.Getenv(name); value != "" {
-		return value
+func looksLikeAPIKeyTOML(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "[[roles]]" || line == "[roles]" {
+			return true
+		}
+		if strings.HasPrefix(line, "apikey") && strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(line, "apikey")), "=") {
+			return true
+		}
 	}
-	return fallback
+	return false
 }
 
-func envDuration(name string, fallback time.Duration) (time.Duration, error) {
-	value := os.Getenv(name)
-	if value == "" {
-		return fallback, nil
+func collectAPIKeys(value any) []string {
+	var keys []string
+	switch typed := value.(type) {
+	case map[string]any:
+		for k, v := range typed {
+			if strings.EqualFold(k, "apikey") {
+				if key, ok := v.(string); ok {
+					keys = append(keys, key)
+				}
+				continue
+			}
+			keys = append(keys, collectAPIKeys(v)...)
+		}
+	case []map[string]any:
+		for _, item := range typed {
+			keys = append(keys, collectAPIKeys(item)...)
+		}
+	case []any:
+		for _, item := range typed {
+			keys = append(keys, collectAPIKeys(item)...)
+		}
 	}
-	duration, err := time.ParseDuration(value)
-	if err != nil {
-		return 0, fmt.Errorf("%s: %w", name, err)
-	}
-	return duration, nil
-}
-
-func envInt(name string, fallback int) (int, error) {
-	value := os.Getenv(name)
-	if value == "" {
-		return fallback, nil
-	}
-	n, err := strconv.Atoi(value)
-	if err != nil {
-		return 0, fmt.Errorf("%s: %w", name, err)
-	}
-	return n, nil
+	return keys
 }
 
 func validateConfig(cfg Config) error {
-	if cfg.GluetunURL == "" {
+	if strings.TrimSpace(cfg.GluetunURL) == "" {
 		return errors.New("gluetun URL is required")
 	}
-	if cfg.QbitURL == "" {
+	if err := validateHTTPURL("gluetun URL", cfg.GluetunURL); err != nil {
+		return err
+	}
+	if strings.TrimSpace(cfg.QbitURL) == "" {
 		return errors.New("qbit URL is required")
 	}
-	if cfg.APIKeyFile == "" {
+	if err := validateHTTPURL("qbit URL", cfg.QbitURL); err != nil {
+		return err
+	}
+	if strings.TrimSpace(cfg.APIKeyFile) == "" {
 		return errors.New("gluetun API key file is required")
+	}
+	if strings.TrimSpace(cfg.QbitInterface) == "" {
+		return errors.New("qbit interface is required")
+	}
+	if strings.TrimSpace(cfg.QbitAPIKeyFile) == "" && (strings.TrimSpace(cfg.QbitUsername) == "") != (strings.TrimSpace(cfg.QbitPasswordFile) == "") {
+		return errors.New("qbit username and password file must both be set or both be empty")
 	}
 	if cfg.Failures <= 0 {
 		return errors.New("failures must be greater than zero")
@@ -139,4 +172,22 @@ func validateConfig(cfg Config) error {
 		return errors.New("qbit audit interval must be greater than zero")
 	}
 	return nil
+}
+
+func validateHTTPURL(name, raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("%s is invalid", name)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("%s must use http or https", name)
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("%s must include a host", name)
+	}
+	return nil
+}
+
+func normalizeURL(raw string) string {
+	return strings.TrimSuffix(strings.TrimSpace(raw), "/")
 }

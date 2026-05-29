@@ -29,6 +29,9 @@ Every setting can be provided by environment variable or flag. Flags override en
 | `GLUETUN_URL` | `--gluetun-url` | none | Required Gluetun control server URL. |
 | `QBIT_URL` | `--qbit-url` | none | Required qBittorrent Web UI URL. |
 | `GLUETUN_API_KEY_FILE` | `--gluetun-api-key-file` | none | Required file containing the Gluetun control API key or Gluetun auth TOML with `apikey = "..."`. |
+| `QBIT_API_KEY_FILE` | `--qbit-api-key-file` | none | File containing the qBittorrent API key. Takes precedence over username/password when set. |
+| `QBIT_USERNAME` | `--qbit-username` | none | qBittorrent username. Must be set with `QBIT_PASSWORD_FILE` / `--qbit-password-file` when no API key file is configured. |
+| `QBIT_PASSWORD_FILE` | `--qbit-password-file` | none | File containing the qBittorrent password. Must be set with `QBIT_USERNAME` / `--qbit-username` when no API key file is configured. |
 | `PORTWATCH_INTERVAL` | `--interval` | `1m` | Poll interval for Gluetun forwarded-port checks. |
 | `PORTWATCH_FAILURES` | `--failures` | `5` | Consecutive missing-port reads before requesting VPN reacquisition. |
 | `PORTWATCH_COOLDOWN` | `--cooldown` | `3m` | Cooldown after a reacquisition attempt before another attempt is allowed. |
@@ -39,6 +42,26 @@ Every setting can be provided by environment variable or flag. Flags override en
 | none | `--dry-run` | `false` | Log intended actions without changing qBittorrent or Gluetun state. |
 
 Durations use Go duration syntax, for example `30s`, `1m`, or `2h45m`.
+
+## Logs
+
+Logs are newline-delimited JSON records written to stdout. Each record includes an `action` field plus action-specific fields, which keeps container logs machine-readable for Docker, unRAID, and log collectors.
+
+## qBittorrent Auth
+
+qBittorrent auth is optional and uses this precedence:
+
+1. `QBIT_API_KEY_FILE` / `--qbit-api-key-file`: trimmed file contents are sent as `Authorization: Bearer <key>` on qBittorrent API requests.
+2. `QBIT_USERNAME` / `--qbit-username` with `QBIT_PASSWORD_FILE` / `--qbit-password-file`: the app logs in to qBittorrent's Web API and reuses the returned session cookie.
+3. No qBittorrent auth settings: the app sends no qBittorrent auth headers or cookies and relies on qBittorrent Web UI subnet auth bypass.
+
+For qBittorrent 5.2 and newer, prefer `QBIT_API_KEY_FILE` over username/password or subnet bypass. The live unRAID qBittorrent containers currently run `qbittorrentofficial/qbittorrent-nox:5.2.0-1`, which supports API key auth.
+
+When `QBIT_API_KEY_FILE` is set, username/password settings are ignored.
+
+## Gluetun Auth TOML
+
+`GLUETUN_API_KEY_FILE` may point to either a raw API key file or a Gluetun auth TOML file. TOML files must contain exactly one `apikey` value anywhere in the decoded document. This matches the current mounted Gluetun role files, which include routes and a single `apikey`; files with zero or multiple keys are rejected so the sidecar cannot silently choose the wrong role.
 
 ## qBittorrent Cache Behavior
 
