@@ -40,9 +40,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		timer := time.NewTimer(r.cfg.Interval)
 		select {
 		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
+			timer.Stop()
 			return ctx.Err()
 		case <-timer.C:
 		}
@@ -59,8 +57,11 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 
 	gluetunPort, missingPortReason, err := r.getGluetunPort(ctx)
 	if err != nil {
-		r.log.Log(string(ActionRecordMissingPort), map[string]any{"error": err})
-		gluetunPort = 0
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		r.log.Log("gluetun_read_error", map[string]any{"error": err})
+		return nil
 	}
 
 	if ValidPort(gluetunPort) {
@@ -71,6 +72,7 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 		Now:               now,
 		GluetunPort:       gluetunPort,
 		State:             r.state,
+		ForceQbitSync:     r.state.ForceQbitSync,
 		FailuresThreshold: r.cfg.Failures,
 		Cooldown:          r.cfg.Cooldown,
 	})
@@ -177,6 +179,10 @@ func qbitPreferencesSafe(prefs QbitPreferences, iface string) bool {
 }
 
 func (r *Runner) syncQbit(ctx context.Context, gluetunPort int) error {
+	if !ValidPort(gluetunPort) {
+		return nil
+	}
+
 	fields := map[string]any{"gluetun_port": gluetunPort, "qbit_port": r.state.CachedQbitPort, "cache_valid": r.state.CacheValid}
 	if r.cfg.DryRun {
 		fields["dry_run"] = true
@@ -204,9 +210,6 @@ func (r *Runner) syncQbit(ctx context.Context, gluetunPort int) error {
 }
 
 func (r *Runner) reacquire(ctx context.Context, now time.Time) error {
-	r.state.LastReacquireAt = now
-	r.state.MissingPortFailures = 0
-
 	if r.cfg.DryRun {
 		r.log.Log(string(ActionReacquirePort), map[string]any{"phase": "stop", "dry_run": true})
 		r.log.Log(string(ActionReacquirePort), map[string]any{"phase": "start", "dry_run": true})
@@ -219,19 +222,44 @@ func (r *Runner) reacquire(ctx context.Context, now time.Time) error {
 		return errors.Join(stopErr, err)
 	}
 	if r.reacquireDelay > 0 {
-		timer := time.NewTimer(r.reacquireDelay)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
-			return errors.Join(stopErr, ctx.Err())
-		case <-timer.C:
+		if err := sleepContext(ctx, r.reacquireDelay); err != nil {
+			return errors.Join(stopErr, err)
 		}
 	}
 
 	r.log.Log(string(ActionReacquirePort), map[string]any{"phase": "start", "cooldown": r.cfg.Cooldown})
 	startErr := r.gluetun.SetVPNStatus(ctx, "running")
+	if err := ctx.Err(); err != nil {
+		return errors.Join(stopErr, startErr, err)
+	}
+	if startErr != nil {
+		r.log.Log(string(ActionReacquirePort), map[string]any{"phase": "error", "stop_error": stopErr, "start_error": startErr})
+		return errors.Join(stopErr, startErr)
+	}
+	if stopErr != nil {
+		r.log.Log(string(ActionReacquirePort), map[string]any{"phase": "error", "stop_error": stopErr})
+		return nil
+	}
+
+	r.commitReacquireSuccess(now)
+	return nil
+}
+
+func (r *Runner) commitReacquireSuccess(now time.Time) {
+	r.state.LastReacquireAt = now
+	r.state.MissingPortFailures = 0
+	r.state.ForceQbitSync = true
 	r.revalidateQbit = true
-	return errors.Join(stopErr, startErr)
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }

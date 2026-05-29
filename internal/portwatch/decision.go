@@ -16,6 +16,7 @@ type DecisionInput struct {
 	Now               time.Time
 	GluetunPort       int
 	State             WatchState
+	ForceQbitSync     bool
 	FailuresThreshold int
 	Cooldown          time.Duration
 }
@@ -31,7 +32,8 @@ func ValidPort(port int) bool {
 
 func Decide(input DecisionInput) Decision {
 	if ValidPort(input.GluetunPort) {
-		if input.State.CacheValid && input.State.CachedQbitPort == input.GluetunPort {
+		forceQbitSync := input.ForceQbitSync || input.State.ForceQbitSync
+		if !forceQbitSync && input.State.CacheValid && input.State.CachedQbitPort == input.GluetunPort {
 			return Decision{Action: ActionNoop}
 		}
 		return Decision{Action: ActionSyncQbit}
@@ -53,4 +55,5 @@ func (state *WatchState) ApplySyncResult(port int, err error) {
 	}
 	state.CachedQbitPort = port
 	state.CacheValid = true
+	state.ForceQbitSync = false
 }

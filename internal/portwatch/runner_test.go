@@ -3,6 +3,7 @@ package portwatch
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -12,12 +13,17 @@ import (
 type fakeGluetun struct {
 	ports        []int
 	portStatuses []PortStatus
+	getErr       error
 	getPortCalls int
 	statuses     []string
 	statusErrs   map[string]error
 }
 
 func (f *fakeGluetun) GetForwardedPort(context.Context) (int, error) {
+	if f.getErr != nil {
+		f.getPortCalls++
+		return 0, f.getErr
+	}
 	if f.getPortCalls >= len(f.ports) {
 		return 0, errors.New("no fake gluetun port queued")
 	}
@@ -27,6 +33,10 @@ func (f *fakeGluetun) GetForwardedPort(context.Context) (int, error) {
 }
 
 func (f *fakeGluetun) GetForwardedPortStatus(context.Context) (PortStatus, error) {
+	if f.getErr != nil {
+		f.getPortCalls++
+		return PortStatus{}, f.getErr
+	}
 	if len(f.portStatuses) == 0 {
 		port, err := f.GetForwardedPort(context.Background())
 		return PortStatus{Port: port, Reason: portReason(port)}, err
@@ -239,21 +249,15 @@ func TestRunnerSuccessfulSyncLogReportsUpdatedCache(t *testing.T) {
 		t.Fatalf("RunOnce returned error: %v", err)
 	}
 
-	syncLine := ""
-	for _, line := range strings.Split(logs.String(), "\n") {
-		if strings.Contains(line, "action=sync_qbit") {
-			syncLine = line
-			break
-		}
-	}
-	if syncLine == "" {
+	syncRecord := actionRecord(t, logs.String(), string(ActionSyncQbit))
+	if syncRecord == nil {
 		t.Fatalf("sync log not found in logs: %q", logs.String())
 	}
-	if !strings.Contains(syncLine, "qbit_port=22222") || !strings.Contains(syncLine, "cache_valid=true") {
-		t.Fatalf("sync log = %q, want updated qbit/cache fields", syncLine)
+	if syncRecord["qbit_port"] != float64(22222) || syncRecord["cache_valid"] != true {
+		t.Fatalf("sync log = %#v, want updated qbit/cache fields", syncRecord)
 	}
-	if strings.Contains(syncLine, "qbit_port=11111") {
-		t.Fatalf("sync log = %q, contains stale qbit port", syncLine)
+	if syncRecord["qbit_port"] == float64(11111) {
+		t.Fatalf("sync log = %#v, contains stale qbit port", syncRecord)
 	}
 }
 
@@ -288,6 +292,27 @@ func TestRunnerQbitWriteFailureForcesNextCycleRevalidation(t *testing.T) {
 	}
 	if len(qbit.setCalls) != 1 {
 		t.Fatalf("set calls = %v, want no second write after revalidation", qbit.setCalls)
+	}
+}
+
+func TestRunnerForcedQbitSyncRetriesUntilSuccess(t *testing.T) {
+	gluetun := &fakeGluetun{ports: []int{22222, 22222}}
+	qbit := &fakeQbit{listenPort: 22222, setErr: errors.New("set failed")}
+	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}))
+	runner.state.ForceQbitSync = true
+
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first RunOnce returned error: %v", err)
+	}
+	qbit.setErr = nil
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce returned error: %v", err)
+	}
+	if len(qbit.setCalls) != 2 {
+		t.Fatalf("set calls = %v, want retry after failed forced sync", qbit.setCalls)
+	}
+	if runner.state.ForceQbitSync {
+		t.Fatal("ForceQbitSync = true, want cleared after successful retry")
 	}
 }
 
@@ -350,6 +375,24 @@ func TestRunnerMissingPortBelowThresholdDoesNotReacquire(t *testing.T) {
 	}
 }
 
+func TestRunnerGluetunReadErrorDoesNotCountAsMissingPort(t *testing.T) {
+	readErr := errors.New("gluetun read failed")
+	gluetun := &fakeGluetun{getErr: readErr}
+	qbit := &fakeQbit{listenPort: 11111}
+	runner := NewRunner(testRunnerConfig(), gluetun, qbit, NewLogger(ioDiscard{}))
+	runner.state.MissingPortFailures = 1
+
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce returned error: %v", err)
+	}
+	if runner.state.MissingPortFailures != 1 {
+		t.Fatalf("missing failures = %d, want preserved 1", runner.state.MissingPortFailures)
+	}
+	if len(gluetun.statuses) != 0 {
+		t.Fatalf("statuses = %v, want no reacquire on read error", gluetun.statuses)
+	}
+}
+
 func TestRunnerLogsDistinctReasonsForMissingAndZeroPort(t *testing.T) {
 	var missingLogs bytes.Buffer
 	missingGluetun := &fakeGluetun{portStatuses: []PortStatus{{Port: 0, Reason: "missing_port"}}}
@@ -357,9 +400,9 @@ func TestRunnerLogsDistinctReasonsForMissingAndZeroPort(t *testing.T) {
 	if err := missingRunner.RunOnce(context.Background()); err != nil {
 		t.Fatalf("missing RunOnce returned error: %v", err)
 	}
-	missingLine := actionLine(missingLogs.String(), string(ActionRecordMissingPort))
-	if !strings.Contains(missingLine, "reason=missing_port") {
-		t.Fatalf("missing port log = %q, want reason=missing_port", missingLine)
+	missingRecord := actionRecord(t, missingLogs.String(), string(ActionRecordMissingPort))
+	if missingRecord["reason"] != "missing_port" {
+		t.Fatalf("missing port log = %#v, want reason=missing_port", missingRecord)
 	}
 
 	var zeroLogs bytes.Buffer
@@ -368,19 +411,28 @@ func TestRunnerLogsDistinctReasonsForMissingAndZeroPort(t *testing.T) {
 	if err := zeroRunner.RunOnce(context.Background()); err != nil {
 		t.Fatalf("zero RunOnce returned error: %v", err)
 	}
-	zeroLine := actionLine(zeroLogs.String(), string(ActionRecordMissingPort))
-	if !strings.Contains(zeroLine, "reason=zero_port") {
-		t.Fatalf("zero port log = %q, want reason=zero_port", zeroLine)
+	zeroRecord := actionRecord(t, zeroLogs.String(), string(ActionRecordMissingPort))
+	if zeroRecord["reason"] != "zero_port" {
+		t.Fatalf("zero port log = %#v, want reason=zero_port", zeroRecord)
 	}
 }
 
-func actionLine(logs, action string) string {
+func actionRecord(t *testing.T, logs, action string) map[string]any {
+	t.Helper()
+
 	for _, line := range strings.Split(logs, "\n") {
-		if strings.Contains(line, "action="+action) {
-			return line
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("log line is not JSON: %v; line=%q", err, line)
+		}
+		if record["action"] == action {
+			return record
 		}
 	}
-	return ""
+	return nil
 }
 
 func TestRunnerMissingPortAtThresholdStopsThenRunsVPN(t *testing.T) {
@@ -416,11 +468,89 @@ func TestRunnerReacquireStartsVPNWhenStopReturnsError(t *testing.T) {
 	runner.reacquireDelay = 0
 
 	err := runner.RunOnce(context.Background())
-	if !errors.Is(err, stopErr) {
-		t.Fatalf("RunOnce error = %v, want stop error", err)
+	if err != nil {
+		t.Fatalf("RunOnce error = %v, want nil for non-context stop error", err)
 	}
 	if got := strings.Join(gluetun.statuses, ","); got != "stopped,running" {
 		t.Fatalf("statuses = %q, want stopped,running", got)
+	}
+}
+
+func TestRunnerReacquireFailureDoesNotCommitCooldownOrStopRun(t *testing.T) {
+	stopErr := errors.New("stop failed")
+	gluetun := &fakeGluetun{
+		ports:      []int{0},
+		statusErrs: map[string]error{"stopped": stopErr},
+	}
+	qbit := &fakeQbit{listenPort: 11111}
+	cfg := testRunnerConfig()
+	cfg.Failures = 1
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
+	runner.reacquireDelay = 0
+
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce returned error: %v, want nil for non-context reacquire failure", err)
+	}
+	if got := strings.Join(gluetun.statuses, ","); got != "stopped,running" {
+		t.Fatalf("statuses = %q, want stopped,running", got)
+	}
+	if runner.state.MissingPortFailures != 0 {
+		t.Fatalf("missing failures = %d, want unchanged 0", runner.state.MissingPortFailures)
+	}
+	if !runner.state.LastReacquireAt.IsZero() {
+		t.Fatalf("LastReacquireAt = %v, want zero after failed reacquire", runner.state.LastReacquireAt)
+	}
+	if runner.state.ForceQbitSync {
+		t.Fatal("ForceQbitSync = true, want not committed after failed reacquire")
+	}
+}
+
+func TestRunnerReacquireStartFailureReturnsErrorAndDoesNotCommitState(t *testing.T) {
+	startErr := errors.New("start failed")
+	gluetun := &fakeGluetun{
+		ports:      []int{0},
+		statusErrs: map[string]error{"running": startErr},
+	}
+	qbit := &fakeQbit{listenPort: 11111}
+	cfg := testRunnerConfig()
+	cfg.Failures = 1
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
+	runner.reacquireDelay = 0
+
+	err := runner.RunOnce(context.Background())
+	if !errors.Is(err, startErr) {
+		t.Fatalf("RunOnce error = %v, want start error", err)
+	}
+	if got := strings.Join(gluetun.statuses, ","); got != "stopped,running" {
+		t.Fatalf("statuses = %q, want stopped,running", got)
+	}
+	if !runner.state.LastReacquireAt.IsZero() {
+		t.Fatalf("LastReacquireAt = %v, want zero after failed start", runner.state.LastReacquireAt)
+	}
+	if runner.state.ForceQbitSync {
+		t.Fatal("ForceQbitSync = true, want not committed after failed start")
+	}
+}
+
+func TestRunnerSuccessfulReacquireForcesSamePortQbitRewrite(t *testing.T) {
+	gluetun := &fakeGluetun{ports: []int{0, 12345}}
+	qbit := &fakeQbit{listenPort: 12345}
+	cfg := testRunnerConfig()
+	cfg.Failures = 1
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
+	runner.reacquireDelay = 0
+
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first RunOnce returned error: %v", err)
+	}
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce returned error: %v", err)
+	}
+	if len(qbit.setCalls) != 1 || qbit.setCalls[0] != 12345 {
+		t.Fatalf("set calls = %v, want forced rewrite to 12345", qbit.setCalls)
+	}
+	if runner.state.ForceQbitSync {
+		t.Fatal("ForceQbitSync = true, want cleared after rewrite")
 	}
 }
 
@@ -487,8 +617,38 @@ func TestRunnerDryRunDoesNotWriteQbitOrReacquire(t *testing.T) {
 	if len(gluetun.statuses) != 0 {
 		t.Fatalf("statuses = %v, want none", gluetun.statuses)
 	}
-	if !strings.Contains(logs.String(), "dry_run=true") || !strings.Contains(logs.String(), "action=sync_qbit") || !strings.Contains(logs.String(), "action=reacquire_port") {
+	syncRecord := actionRecord(t, logs.String(), string(ActionSyncQbit))
+	reacquireRecord := actionRecord(t, logs.String(), string(ActionReacquirePort))
+	if syncRecord == nil || syncRecord["dry_run"] != true || reacquireRecord == nil || reacquireRecord["dry_run"] != true {
 		t.Fatalf("logs did not include dry-run actions: %q", logs.String())
+	}
+}
+
+func TestRunnerDryRunReacquireDoesNotCommitState(t *testing.T) {
+	cfg := testRunnerConfig()
+	cfg.DryRun = true
+	cfg.Failures = 1
+	gluetun := &fakeGluetun{ports: []int{0}}
+	qbit := &fakeQbit{listenPort: 11111}
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
+	runner.state.MissingPortFailures = 7
+	runner.state.ForceQbitSync = false
+	runner.reacquireDelay = 0
+
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce returned error: %v", err)
+	}
+	if runner.state.MissingPortFailures != 7 {
+		t.Fatalf("missing failures = %d, want preserved 7", runner.state.MissingPortFailures)
+	}
+	if !runner.state.LastReacquireAt.IsZero() {
+		t.Fatalf("LastReacquireAt = %v, want zero", runner.state.LastReacquireAt)
+	}
+	if runner.state.ForceQbitSync {
+		t.Fatal("ForceQbitSync = true, want false")
+	}
+	if len(gluetun.statuses) != 0 {
+		t.Fatalf("statuses = %v, want no stop/start in dry run", gluetun.statuses)
 	}
 }
 
@@ -530,6 +690,39 @@ func TestRunnerAuditRefreshesQbitCache(t *testing.T) {
 	}
 }
 
+func TestRunnerAuditRewritesQbitWhenPreferencesResetButPortStillMatches(t *testing.T) {
+	gluetun := &fakeGluetun{ports: []int{12345, 12345}}
+	qbit := &fakeQbit{prefs: QbitPreferences{
+		ListenPort:              12345,
+		CurrentNetworkInterface: "tun0",
+		RandomPort:              false,
+		UPnP:                    false,
+	}}
+	cfg := testRunnerConfig()
+	cfg.QbitAuditInterval = time.Nanosecond
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
+
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first RunOnce returned error: %v", err)
+	}
+	qbit.prefs = QbitPreferences{
+		ListenPort:              12345,
+		CurrentNetworkInterface: "eth0",
+		RandomPort:              true,
+		UPnP:                    true,
+	}
+	time.Sleep(time.Millisecond)
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce returned error: %v", err)
+	}
+	if len(qbit.setCalls) != 1 || qbit.setCalls[0] != 12345 || qbit.ifaces[0] != "tun0" {
+		t.Fatalf("set calls = %v ifaces=%v, want rewrite to 12345 on tun0", qbit.setCalls, qbit.ifaces)
+	}
+	if qbit.prefs.CurrentNetworkInterface != "tun0" || qbit.prefs.RandomPort || qbit.prefs.UPnP {
+		t.Fatalf("prefs = %+v, want safe tun0 prefs", qbit.prefs)
+	}
+}
+
 func TestRunnerAuditsAfterCacheCreatedByWriteWithoutRead(t *testing.T) {
 	gluetun := &fakeGluetun{ports: []int{12345, 12345}}
 	qbit := &fakeQbit{listenPort: 11111, getErr: errors.New("read failed")}
@@ -553,20 +746,27 @@ func TestRunnerAuditsAfterCacheCreatedByWriteWithoutRead(t *testing.T) {
 	}
 }
 
-func TestLoggerWritesKeyValueLines(t *testing.T) {
+func TestLoggerWritesJSONRecords(t *testing.T) {
 	var out bytes.Buffer
 	logger := NewLogger(&out)
 
 	logger.Log("sync_qbit", map[string]any{"port": 12345, "dry_run": true})
 
-	line := out.String()
-	if strings.Contains(line, "name=") {
-		t.Fatalf("log line %q includes removed name prefix", line)
+	var record map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &record); err != nil {
+		t.Fatalf("log line is not JSON: %v; line=%q", err, out.String())
 	}
-	for _, want := range []string{"action=sync_qbit", "port=12345", "dry_run=true", "\n"} {
-		if !strings.Contains(line, want) {
-			t.Fatalf("log line %q missing %q", line, want)
-		}
+	if record["action"] != "sync_qbit" {
+		t.Fatalf("action = %v, want sync_qbit", record["action"])
+	}
+	if record["port"] != float64(12345) {
+		t.Fatalf("port = %v, want 12345", record["port"])
+	}
+	if record["dry_run"] != true {
+		t.Fatalf("dry_run = %v, want true", record["dry_run"])
+	}
+	if !bytes.HasSuffix(out.Bytes(), []byte("\n")) {
+		t.Fatalf("log output %q missing trailing newline", out.String())
 	}
 }
 

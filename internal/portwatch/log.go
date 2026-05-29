@@ -1,52 +1,34 @@
 package portwatch
 
 import (
-	"fmt"
+	"context"
 	"io"
-	"sort"
-	"strings"
-	"sync"
+	"log/slog"
 )
 
 type Logger struct {
-	mu  sync.Mutex
-	out io.Writer
+	logger *slog.Logger
 }
 
 func NewLogger(out io.Writer) *Logger {
 	if out == nil {
 		out = io.Discard
 	}
-	return &Logger{out: out}
+	return &Logger{logger: slog.New(slog.NewJSONHandler(out, nil))}
 }
 
 func (l *Logger) Log(action string, fields map[string]any) {
-	if l == nil {
+	if l == nil || l.logger == nil {
 		return
 	}
 
-	parts := []string{"action=" + logValue(action)}
-	keys := make([]string, 0, len(fields))
-	for key := range fields {
+	attrs := make([]slog.Attr, 0, len(fields)+1)
+	attrs = append(attrs, slog.String("action", action))
+	for key, value := range fields {
 		if key == "action" {
 			continue
 		}
-		keys = append(keys, key)
+		attrs = append(attrs, slog.Any(key, value))
 	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		parts = append(parts, key+"="+logValue(fields[key]))
-	}
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	fmt.Fprintln(l.out, strings.Join(parts, " "))
-}
-
-func logValue(value any) string {
-	text := fmt.Sprint(value)
-	if text == "" {
-		return `""`
-	}
-	return strings.NewReplacer("\n", "\\n", "\r", "\\r", "\t", "\\t", " ", "_").Replace(text)
+	l.logger.LogAttrs(context.Background(), slog.LevelInfo, "", attrs...)
 }

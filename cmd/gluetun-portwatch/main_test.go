@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"gluetun-portwatch/internal/portwatch"
 )
 
 func TestRunErrorContextCancelExits0(t *testing.T) {
@@ -66,4 +68,53 @@ func TestMainReadAPIKeyErrorExits2(t *testing.T) {
 	if !strings.Contains(string(out), "api key error:") {
 		t.Fatalf("output = %q, want api key error", out)
 	}
+}
+
+func TestQbitAuthFromConfigReadsAPIKeyFile(t *testing.T) {
+	path := writeSecretFile(t, " qbit-api-key\n")
+
+	auth, err := qbitAuthFromConfig(portwatch.Config{QbitAPIKeyFile: path})
+	if err != nil {
+		t.Fatalf("qbitAuthFromConfig returned error: %v", err)
+	}
+	if auth.APIKey != "qbit-api-key" {
+		t.Fatalf("APIKey = %q, want qbit-api-key", auth.APIKey)
+	}
+	if auth.Username != "" || auth.Password != "" {
+		t.Fatalf("username/password = %q/%q, want empty", auth.Username, auth.Password)
+	}
+}
+
+func TestQbitAuthFromConfigReadsUsernamePasswordFile(t *testing.T) {
+	path := writeSecretFile(t, " secret-password\n")
+
+	auth, err := qbitAuthFromConfig(portwatch.Config{QbitUsername: "admin", QbitPasswordFile: path})
+	if err != nil {
+		t.Fatalf("qbitAuthFromConfig returned error: %v", err)
+	}
+	if auth.APIKey != "" {
+		t.Fatalf("APIKey = %q, want empty", auth.APIKey)
+	}
+	if auth.Username != "admin" || auth.Password != "secret-password" {
+		t.Fatalf("username/password = %q/%q, want admin/secret-password", auth.Username, auth.Password)
+	}
+}
+
+func TestQbitAuthFromConfigRejectsIncompleteAuth(t *testing.T) {
+	_, err := qbitAuthFromConfig(portwatch.Config{QbitUsername: "admin"})
+	if err == nil {
+		t.Fatal("qbitAuthFromConfig returned nil error, want error")
+	}
+	if !strings.Contains(err.Error(), "qbit username and password file") {
+		t.Fatalf("error = %q, want qbit username and password file", err.Error())
+	}
+}
+
+func writeSecretFile(t *testing.T, content string) string {
+	t.Helper()
+	path := t.TempDir() + "/secret"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return path
 }
