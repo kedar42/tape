@@ -11,12 +11,15 @@ import (
 )
 
 type fakeGluetun struct {
-	ports        []int
-	portStatuses []PortStatus
-	getErr       error
-	getPortCalls int
-	statuses     []string
-	statusErrs   map[string]error
+	ports             []int
+	portStatuses      []PortStatus
+	getErr            error
+	getPortCalls      int
+	vpnStatus         string
+	vpnStatusErr      error
+	getVPNStatusCalls int
+	statuses          []string
+	statusErrs        map[string]error
 }
 
 func (f *fakeGluetun) GetForwardedPort(context.Context) (int, error) {
@@ -55,6 +58,17 @@ func (f *fakeGluetun) SetVPNStatus(_ context.Context, status string) error {
 		return f.statusErrs[status]
 	}
 	return nil
+}
+
+func (f *fakeGluetun) GetVPNStatus(context.Context) (string, error) {
+	f.getVPNStatusCalls++
+	if f.vpnStatusErr != nil {
+		return "", f.vpnStatusErr
+	}
+	if f.vpnStatus != "" {
+		return f.vpnStatus, nil
+	}
+	return "running", nil
 }
 
 type fakeQbit struct {
@@ -564,7 +578,51 @@ func TestRunnerMissingPortAtThresholdStopsThenRunsVPN(t *testing.T) {
 	}
 }
 
-func TestRunnerReacquireStartsVPNWhenStopReturnsError(t *testing.T) {
+func TestRunnerSkipsReacquireWhenVPNAlreadyStopping(t *testing.T) {
+	gluetun := &fakeGluetun{ports: []int{0}, vpnStatus: "stopping"}
+	qbit := &fakeQbit{listenPort: 11111}
+	cfg := testRunnerConfig()
+	cfg.Failures = 1
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
+	runner.reacquireDelay = 0
+
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce returned error: %v", err)
+	}
+	if gluetun.getVPNStatusCalls != 1 {
+		t.Fatalf("GetVPNStatus calls = %d, want 1", gluetun.getVPNStatusCalls)
+	}
+	if len(gluetun.statuses) != 0 {
+		t.Fatalf("statuses = %v, want no stop/start while Gluetun is stopping", gluetun.statuses)
+	}
+	if runner.state.LastReacquireAt.IsZero() {
+		t.Fatal("LastReacquireAt is zero, want cooldown after skipped reacquire")
+	}
+}
+
+func TestRunnerSkipsReacquireWhenVPNStatusReadFails(t *testing.T) {
+	gluetun := &fakeGluetun{ports: []int{0}, vpnStatusErr: errors.New("status failed")}
+	qbit := &fakeQbit{listenPort: 11111}
+	cfg := testRunnerConfig()
+	cfg.Failures = 1
+	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
+	runner.reacquireDelay = 0
+
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce returned error: %v", err)
+	}
+	if gluetun.getVPNStatusCalls != 1 {
+		t.Fatalf("GetVPNStatus calls = %d, want 1", gluetun.getVPNStatusCalls)
+	}
+	if len(gluetun.statuses) != 0 {
+		t.Fatalf("statuses = %v, want no stop/start when status read fails", gluetun.statuses)
+	}
+	if runner.state.LastReacquireAt.IsZero() {
+		t.Fatal("LastReacquireAt is zero, want cooldown after skipped reacquire")
+	}
+}
+
+func TestRunnerReacquireDoesNotStartVPNWhenStopReturnsError(t *testing.T) {
 	stopErr := errors.New("stop failed")
 	gluetun := &fakeGluetun{
 		ports:      []int{0},
@@ -580,12 +638,15 @@ func TestRunnerReacquireStartsVPNWhenStopReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunOnce error = %v, want nil for non-context stop error", err)
 	}
-	if got := strings.Join(gluetun.statuses, ","); got != "stopped,running" {
-		t.Fatalf("statuses = %q, want stopped,running", got)
+	if got := strings.Join(gluetun.statuses, ","); got != "stopped" {
+		t.Fatalf("statuses = %q, want stopped only", got)
+	}
+	if runner.state.LastReacquireAt.IsZero() {
+		t.Fatal("LastReacquireAt is zero, want cooldown after failed stop")
 	}
 }
 
-func TestRunnerReacquireFailureDoesNotCommitCooldownOrStopRun(t *testing.T) {
+func TestRunnerReacquireStopFailureCommitsCooldownAndDoesNotStopRun(t *testing.T) {
 	stopErr := errors.New("stop failed")
 	gluetun := &fakeGluetun{
 		ports:      []int{0},
@@ -600,21 +661,21 @@ func TestRunnerReacquireFailureDoesNotCommitCooldownOrStopRun(t *testing.T) {
 	if err := runner.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce returned error: %v, want nil for non-context reacquire failure", err)
 	}
-	if got := strings.Join(gluetun.statuses, ","); got != "stopped,running" {
-		t.Fatalf("statuses = %q, want stopped,running", got)
+	if got := strings.Join(gluetun.statuses, ","); got != "stopped" {
+		t.Fatalf("statuses = %q, want stopped only", got)
 	}
 	if runner.state.MissingPortFailures != 0 {
 		t.Fatalf("missing failures = %d, want unchanged 0", runner.state.MissingPortFailures)
 	}
-	if !runner.state.LastReacquireAt.IsZero() {
-		t.Fatalf("LastReacquireAt = %v, want zero after failed reacquire", runner.state.LastReacquireAt)
+	if runner.state.LastReacquireAt.IsZero() {
+		t.Fatal("LastReacquireAt is zero, want cooldown after failed reacquire")
 	}
 	if runner.state.ForceQbitSync {
 		t.Fatal("ForceQbitSync = true, want not committed after failed reacquire")
 	}
 }
 
-func TestRunnerReacquireStartFailureReturnsErrorAndDoesNotCommitState(t *testing.T) {
+func TestRunnerReacquireStartFailureCommitsCooldownAndDoesNotStopRun(t *testing.T) {
 	startErr := errors.New("start failed")
 	gluetun := &fakeGluetun{
 		ports:      []int{0},
@@ -626,15 +687,14 @@ func TestRunnerReacquireStartFailureReturnsErrorAndDoesNotCommitState(t *testing
 	runner := NewRunner(cfg, gluetun, qbit, NewLogger(ioDiscard{}))
 	runner.reacquireDelay = 0
 
-	err := runner.RunOnce(context.Background())
-	if !errors.Is(err, startErr) {
-		t.Fatalf("RunOnce error = %v, want start error", err)
+	if err := runner.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce error = %v, want nil for non-context start error", err)
 	}
 	if got := strings.Join(gluetun.statuses, ","); got != "stopped,running" {
 		t.Fatalf("statuses = %q, want stopped,running", got)
 	}
-	if !runner.state.LastReacquireAt.IsZero() {
-		t.Fatalf("LastReacquireAt = %v, want zero after failed start", runner.state.LastReacquireAt)
+	if runner.state.LastReacquireAt.IsZero() {
+		t.Fatal("LastReacquireAt is zero, want cooldown after failed start")
 	}
 	if runner.state.ForceQbitSync {
 		t.Fatal("ForceQbitSync = true, want not committed after failed start")

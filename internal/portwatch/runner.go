@@ -238,10 +238,30 @@ func (r *Runner) reacquire(ctx context.Context, now time.Time) error {
 		return nil
 	}
 
+	vpnStatus, err := r.gluetun.GetVPNStatus(ctx)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return errors.Join(err, ctxErr)
+		}
+		r.state.LastReacquireAt = now
+		r.log.Log(string(ActionReacquirePort), map[string]any{"phase": "skip", "error": err, "cooldown": r.cfg.Cooldown})
+		return nil
+	}
+	if vpnStatus != "running" {
+		r.state.LastReacquireAt = now
+		r.log.Log(string(ActionReacquirePort), map[string]any{"phase": "skip", "vpn_status": vpnStatus, "cooldown": r.cfg.Cooldown})
+		return nil
+	}
+
+	r.state.LastReacquireAt = now
 	r.log.Log(string(ActionReacquirePort), map[string]any{"phase": "stop"})
 	stopErr := r.gluetun.SetVPNStatus(ctx, "stopped")
 	if err := ctx.Err(); err != nil {
 		return errors.Join(stopErr, err)
+	}
+	if stopErr != nil {
+		r.log.Log(string(ActionReacquirePort), map[string]any{"phase": "error", "stop_error": stopErr, "cooldown": r.cfg.Cooldown})
+		return nil
 	}
 	if r.reacquireDelay > 0 {
 		if err := sleepContext(ctx, r.reacquireDelay); err != nil {
@@ -255,14 +275,9 @@ func (r *Runner) reacquire(ctx context.Context, now time.Time) error {
 		return errors.Join(stopErr, startErr, err)
 	}
 	if startErr != nil {
-		r.log.Log(string(ActionReacquirePort), map[string]any{"phase": "error", "stop_error": stopErr, "start_error": startErr})
-		return errors.Join(stopErr, startErr)
-	}
-	if stopErr != nil {
-		r.log.Log(string(ActionReacquirePort), map[string]any{"phase": "error", "stop_error": stopErr})
+		r.log.Log(string(ActionReacquirePort), map[string]any{"phase": "error", "start_error": startErr, "cooldown": r.cfg.Cooldown})
 		return nil
 	}
-
 	r.commitReacquireSuccess(now)
 	return nil
 }

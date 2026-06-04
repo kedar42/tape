@@ -52,6 +52,7 @@ type QbitAuth struct {
 
 type GluetunAPI interface {
 	GetForwardedPort(context.Context) (int, error)
+	GetVPNStatus(context.Context) (string, error)
 	SetVPNStatus(context.Context, string) error
 }
 
